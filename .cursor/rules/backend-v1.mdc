@@ -1,0 +1,45 @@
+---
+description: Backend serverless Apro Click v1 — Python 3.13, Serverless 4, Powertools, PostgreSQL, SQLAlchemy, Terraform
+alwaysApply: true
+---
+
+# Apro Click Admin Backend v1
+
+- **Stack:** Serverless Framework 4, Python 3.13, AWS Lambda, AWS Lambda Powertools, HTTP API, PostgreSQL 17 (RDS), SQLAlchemy 2.x, Alembic.
+- **Flujo de desarrollo y comandos:** seguir `AGENTS.md` en la raíz del repositorio.
+- **Arquitectura e imports:** `docs/ARCHITECTURE_GUIDE_V1.md`.
+- **Modelo de datos:** `docs/DATA_MODEL_DOMAIN_V1.md`.
+
+## Estructura por servicio
+
+- Cada servicio vive en `src/services/<nombre>/`.
+- **No** usar una carpeta `src/` anidada dentro del servicio. Código en `handlers/`, `models/`, `services/` (negocio), `utils/` junto a `serverless.yml`.
+- Handler en YAML: `handlers/archivo.lambda_handler` (no `src/handlers/...`).
+
+## Base de datos y ORM
+
+- **PostgreSQL 17** en RDS, gestionado con **Terraform** (`infra/`).
+- **Modelos ORM** en `src/shared/database/models/`. Cada servicio re-exporta los que necesita en `models/`.
+- **Engine**: `src/shared/database/engine.py` — singleton con `pool_size=1` (Lambda). Usar `get_session()` en servicios.
+- **Migraciones**: Alembic (`alembic/versions/`). Correr: `PYTHONPATH=src/shared alembic upgrade head`.
+- **Conexión**: `DATABASE_URL` con `sslmode=require`.
+- **Paginación**: `offset` + `limit` (no `last_evaluated_key`).
+
+## Shared
+
+- Fuente: `src/shared/` (incluye `database/`). Copia por servicio: `npm run shared:sync` → `src/services/*/shared/` (gitignored).
+
+## Deploy
+
+- Scripts usan: `npx sls deploy --verbose --aws-profile mh-prod --stage <stage>` (perfil/stage configurables; ver `AGENTS.md` y `scripts/sls_cli.py`).
+- No sustituir por `serverless`/`sls` distintos salvo petición explícita.
+- Si hay cambios en modelos ORM, generar migración Alembic y ejecutar `shared:sync` antes de deployar.
+
+## Infraestructura (Terraform)
+
+- Recursos RDS (instancia, security group, subnet group) en `infra/`. No modificar manualmente en consola AWS.
+- `infra/terraform.tfvars` contiene credenciales y está en `.gitignore`.
+
+## Scripts Python
+
+- Herramientas en `scripts/*.py` (multiplataforma). Imports locales: añadir `sys.path` para `sls_cli` como en `deploy_service.py`.

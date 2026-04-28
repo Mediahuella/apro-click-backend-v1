@@ -1,0 +1,231 @@
+service: apro-click-admin-users
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: users
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+    COGNITO_APP_CLIENT_ID: !Ref CognitoUserPoolClient
+    # Opcional: solo si no existe companies.is_system (override UUID empresa plataforma)
+    APRO_CLICK_COMPANY_ID: ${env:APRO_CLICK_COMPANY_ID, ''}
+    # Misma versión que OAuth / pedidos; query staffMembers requiere scope read_users en la tienda
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    # Opcional: invitar/crear staff (Shopify no expone mutación pública) vía vuestro HTTP endpoint
+    SHOPIFY_STAFF_PROVISIONER_URL: ${env:SHOPIFY_STAFF_PROVISIONER_URL, ''}
+    SHOPIFY_STAFF_PROVISIONER_API_KEY: ${env:SHOPIFY_STAFF_PROVISIONER_API_KEY, ''}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:AdminCreateUser
+            - cognito-idp:AdminGetUser
+            - cognito-idp:AdminUpdateUserAttributes
+            - cognito-idp:AdminDisableUser
+            - cognito-idp:AdminEnableUser
+            - cognito-idp:AdminDeleteUser
+            - cognito-idp:AdminAddUserToGroup
+            - cognito-idp:AdminRemoveUserFromGroup
+            - cognito-idp:AdminListGroupsForUser
+            - cognito-idp:ListUsers
+          Resource:
+            - !GetAtt CognitoUserPool.Arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  createUser:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users
+          method: post
+
+  listUsers:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users
+          method: get
+
+  getUser:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/{user_id}
+          method: get
+
+  updateUser:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/{user_id}
+          method: put
+
+  linkShopifyStaff:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/{user_id}/link-shopify-staff
+          method: post
+
+  associateShopifyStaff:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/{user_id}/associate-shopify-staff
+          method: post
+
+  deleteUser:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/{user_id}
+          method: delete
+
+resources:
+  Resources:
+    # -----------------------------------------------------------------
+    # Cognito User Pool
+    # -----------------------------------------------------------------
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: apro-click-${self:provider.stage}-user-pool
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        MfaConfiguration: 'OFF'
+        AccountRecoverySetting:
+          RecoveryMechanisms:
+            - Name: verified_email
+              Priority: 1
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 8
+            RequireUppercase: true
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: false
+            TemporaryPasswordValidityDays: 7
+        Schema:
+          - Name: email
+            AttributeDataType: String
+            Mutable: true
+            Required: true
+          - Name: given_name
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+          - Name: family_name
+            AttributeDataType: String
+            Mutable: true
+            Required: false
+        AdminCreateUserConfig:
+          AllowAdminCreateUserOnly: true
+          InviteMessageTemplate:
+            EmailSubject: 'Bienvenido a Apro Click Admin'
+            EmailMessage: 'Tu usuario es {username} y tu contraseña temporal es {####}'
+
+    # -----------------------------------------------------------------
+    # Cognito App Client (server-side, no secret)
+    # -----------------------------------------------------------------
+    CognitoUserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: apro-click-${self:provider.stage}-app-client
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_ADMIN_USER_PASSWORD_AUTH
+          - ALLOW_REFRESH_TOKEN_AUTH
+          - ALLOW_USER_PASSWORD_AUTH
+        PreventUserExistenceErrors: ENABLED
+        AccessTokenValidity: 1
+        IdTokenValidity: 1
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: hours
+          IdToken: hours
+          RefreshToken: days
+        SupportedIdentityProviders:
+          - COGNITO
+
+    # -----------------------------------------------------------------
+    # Cognito Groups
+    # -----------------------------------------------------------------
+    CognitoGroupSuperAdmin:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: superadmin
+        UserPoolId: !Ref CognitoUserPool
+        Description: Super administrators (developers)
+        Precedence: 0
+
+    CognitoGroupAdmin:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: admin
+        UserPoolId: !Ref CognitoUserPool
+        Description: Administrators
+        Precedence: 10
+
+    CognitoGroupSales:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: sales
+        UserPoolId: !Ref CognitoUserPool
+        Description: Sales team
+        Precedence: 20
+
+    CognitoGroupKpiVisualizers:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        GroupName: kpi_visualizers
+        UserPoolId: !Ref CognitoUserPool
+        Description: KPI visualizers (read-only dashboards)
+        Precedence: 30
+
+  Outputs:
+    CognitoUserPoolId:
+      Value: !Ref CognitoUserPool
+      Export:
+        Name: apro-click-${self:provider.stage}-cognito-user-pool-id
+
+    CognitoUserPoolArn:
+      Value: !GetAtt CognitoUserPool.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-cognito-user-pool-arn
+
+    CognitoAppClientId:
+      Value: !Ref CognitoUserPoolClient
+      Export:
+        Name: apro-click-${self:provider.stage}-cognito-app-client-id

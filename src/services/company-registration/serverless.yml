@@ -1,0 +1,67 @@
+service: apro-click-admin-company-registration
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: company-registration
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    # Clave compartida con el theme app extension / formulario público (header X-Api-Key)
+    COMPANY_REGISTRATION_API_KEY: ${env:COMPANY_REGISTRATION_API_KEY, ''}
+    # Admin API GraphQL (/admin/api/<version>/graphql.json) — write_customers + read_customers
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  registrationRequests:
+    handler: handlers/registration_requests.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/company-registration-requests
+          method: post
+      - httpApi:
+          path: /api/v1/company-registration-requests
+          method: get
+      - httpApi:
+          path: /api/v1/company-registration-requests/{request_id}
+          method: get
+      - httpApi:
+          path: /api/v1/company-registration-requests/{request_id}/approve
+          method: post
+      - httpApi:
+          path: /api/v1/company-registration-requests/{request_id}/reject
+          method: post

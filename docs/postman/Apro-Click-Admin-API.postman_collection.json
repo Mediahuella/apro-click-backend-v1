@@ -1,0 +1,212 @@
+{
+  "info": {
+    "_postman_id": "apro-click-admin-api-v1",
+    "name": "Apro Click Admin API",
+    "description": "Importa también el entorno `Apro-Click-Admin.postman_environment.json` (misma carpeta), rellena `baseUrlAuth`, `baseUrlUsers` y `baseUrlCommon`, y selecciónalo en el selector de entornos de Postman.\n\nCada servicio Serverless tiene su propia URL de HTTP API (salida de deploy: HttpApiUrl, o consola API Gateway).\n\nOrden de deploy: `users` antes que `auth`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [],
+  "item": [
+    {
+      "name": "Auth (apro-click-admin-auth)",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrlAuth}}/api/v1/health-auth"
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}"
+            },
+            "url": "{{baseUrlAuth}}/api/v1/auth/login",
+            "description": "Si Cognito devuelve NEW_PASSWORD_REQUIRED, guarda `data.session` y usa Change first-time password."
+          }
+        },
+        {
+          "name": "Change first-time password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"new_password\": \"{{newPassword}}\",\n  \"session\": \"{{authSession}}\"\n}"
+            },
+            "url": "{{baseUrlAuth}}/api/v1/auth/change-password"
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\"\n}"
+            },
+            "url": "{{baseUrlAuth}}/api/v1/auth/forgot-password"
+          }
+        },
+        {
+          "name": "Confirm forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"confirmation_code\": \"{{confirmationCode}}\",\n  \"new_password\": \"{{newPassword}}\"\n}"
+            },
+            "url": "{{baseUrlAuth}}/api/v1/auth/confirm-forgot-password"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"access_token\": \"{{accessToken}}\",\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            },
+            "description": "Envía al menos uno de access_token o refresh_token.",
+            "url": "{{baseUrlAuth}}/api/v1/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users (apro-click-admin-users)",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrlUsers}}/api/v1/health-users"
+          }
+        },
+        {
+          "name": "Create user",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{newUserEmail}}\",\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"temporary_password\": \"{{temporaryPassword}}\"\n}"
+            },
+            "description": "Roles válidos: SUPERADMIN, ADMIN, SALES, KPI_VISUALIZERS. temporary_password es opcional.",
+            "url": "{{baseUrlUsers}}/api/v1/users"
+          }
+        },
+        {
+          "name": "List users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlUsers}}/api/v1/users?limit=50",
+              "host": ["{{baseUrlUsers}}"],
+              "path": ["api", "v1", "users"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "last_key",
+                  "value": "",
+                  "disabled": true,
+                  "description": "JSON serializado del LastEvaluatedKey (opcional, paginación)"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get user by sub",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrlUsers}}/api/v1/users/{{userSub}}"
+          }
+        },
+        {
+          "name": "Update user",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": "{{baseUrlUsers}}/api/v1/users/{{userSub}}"
+          }
+        },
+        {
+          "name": "Delete user",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrlUsers}}/api/v1/users/{{userSub}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Common (apro-click-admin-common)",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrlCommon}}/api/v1/health-common"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+service: apro-click-admin-shopify
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: shopify
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    SHOPIFY_CLIENT_ID: ${env:SHOPIFY_CLIENT_ID, ''}
+    SHOPIFY_CLIENT_SECRET: ${env:SHOPIFY_CLIENT_SECRET, ''}
+    # Scopes separados por coma; deben alinearse con la app en Partners
+    SHOPIFY_OAUTH_SCOPES: ${env:SHOPIFY_OAUTH_SCOPES, ''}
+    # URL exacta registrada en la app Shopify como redirect (callback del API)
+    SHOPIFY_OAUTH_REDIRECT_URI: ${env:SHOPIFY_OAUTH_REDIRECT_URI, ''}
+    # App conectora: destino del 302 tras guardar token (?shop=&oauth_status=success&installation_id=)
+    SHOPIFY_CONNECTOR_URL: ${env:SHOPIFY_CONNECTOR_URL, ''}
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  shopifyOauth:
+    handler: handlers/shopify_oauth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/shopify/oauth/start
+          method: get
+      - httpApi:
+          path: /api/v1/shopify/oauth/callback
+          method: get

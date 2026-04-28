@@ -1,0 +1,112 @@
+service: apro-click-admin-chat-ws
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    CHAT_STOREFRONT_API_KEY: ${env:CHAT_STOREFRONT_API_KEY, ''}
+    WS_CONNECTIONS_TABLE: apro-click-${self:provider.stage}-ws-connections
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:GetItem
+            - dynamodb:Query
+            - dynamodb:UpdateItem
+          Resource:
+            - !GetAtt WsConnectionsTable.Arn
+            - !Sub '${WsConnectionsTable.Arn}/index/*'
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+          Resource:
+            - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebsocketsApi}/*'
+
+functions:
+  wsConnect:
+    handler: handlers/connect.lambda_handler
+    events:
+      - websocket:
+          route: $connect
+
+  wsDisconnect:
+    handler: handlers/disconnect.lambda_handler
+    events:
+      - websocket:
+          route: $disconnect
+
+  wsRouting:
+    handler: handlers/routing.lambda_handler
+    events:
+      - websocket:
+          route: typing
+      - websocket:
+          route: ping
+      - websocket:
+          route: $default
+
+resources:
+  Resources:
+    WsConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: apro-click-${self:provider.stage}-ws-connections
+        BillingMode: PAY_PER_REQUEST
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        AttributeDefinitions:
+          - AttributeName: connection_id
+            AttributeType: S
+          - AttributeName: conversation_id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connection_id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: conversation-index
+            KeySchema:
+              - AttributeName: conversation_id
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+  Outputs:
+    WsApiId:
+      Value: !Ref WebsocketsApi
+      Export:
+        Name: apro-click-${self:provider.stage}-ws-api-id
+    WsEndpoint:
+      Value: !Sub 'https://${WebsocketsApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}'
+      Export:
+        Name: apro-click-${self:provider.stage}-ws-endpoint
+    WsConnectionsTableArn:
+      Value: !GetAtt WsConnectionsTable.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-ws-connections-table-arn

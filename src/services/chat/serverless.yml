@@ -1,0 +1,97 @@
+service: apro-click-admin-chat
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: chat
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    CHAT_STOREFRONT_API_KEY: ${env:CHAT_STOREFRONT_API_KEY, ''}
+    CHAT_ATTACHMENTS_BUCKET: ${env:CHAT_ATTACHMENTS_BUCKET, ''}
+    WS_API_ID: ${env:WS_API_ID, ''}
+    WS_CONNECTIONS_TABLE: apro-click-${self:provider.stage}-ws-connections
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+        - Effect: Allow
+          Action:
+            - execute-api:ManageConnections
+          Resource:
+            - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${env:WS_API_ID, "*"}/*'
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:DeleteItem
+          Resource:
+            - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/apro-click-${self:provider.stage}-ws-connections'
+            - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/apro-click-${self:provider.stage}-ws-connections/index/*'
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+          Resource:
+            - !Sub 'arn:aws:s3:::${env:CHAT_ATTACHMENTS_BUCKET, "aproclick-${self:provider.stage}-chat-attachments"}/*'
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  chat:
+    handler: handlers/chat.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/chat/public/messages
+          method: post
+      - httpApi:
+          path: /api/v1/chat/public/conversations
+          method: get
+      - httpApi:
+          path: /api/v1/chat/public/conversations/{conv_id}/messages
+          method: get
+      - httpApi:
+          path: /api/v1/chat/conversations
+          method: get
+      - httpApi:
+          path: /api/v1/chat/conversations/{conv_id}
+          method: patch
+      - httpApi:
+          path: /api/v1/chat/conversations/{conv_id}/messages
+          method: get
+      - httpApi:
+          path: /api/v1/chat/conversations/{conv_id}/messages
+          method: post
+      - httpApi:
+          path: /api/v1/chat/public/conversations/{conv_id}/upload
+          method: post
+      - httpApi:
+          path: /api/v1/chat/conversations/{conv_id}/upload
+          method: post

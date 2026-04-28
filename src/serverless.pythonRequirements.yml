@@ -1,0 +1,19 @@
+# Configuración compartida de Python Requirements
+# Contiene la configuración del plugin serverless-python-requirements
+# El plugin está incluido por defecto en Serverless Framework v4
+
+pythonRequirements:
+  dockerizePip: true
+  layer:
+    name: PythonRequirementsLambdaLayer
+    description: Layer with local packages
+    compatibleRuntimes:
+      - python3.13
+  slim: true
+  strip: false
+  noDeps:
+    - boto3
+    - botocore
+    - aws-lambda-powertools
+  pipCmdExtraArgs:
+    - --no-cache-dir

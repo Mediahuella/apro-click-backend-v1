@@ -1,0 +1,20 @@
+service: apro-click-admin-notifications
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: notifications
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider: ${file(../../serverless.provider.yml):providerBase}
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get

@@ -1,0 +1,55 @@
+service: apro-click-admin-companies
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: companies
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  companies:
+    handler: handlers/companies.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/companies
+          method: post
+      - httpApi:
+          path: /api/v1/companies
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}
+          method: put
+      - httpApi:
+          path: /api/v1/companies/{company_id}
+          method: delete

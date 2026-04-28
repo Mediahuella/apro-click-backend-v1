@@ -1,0 +1,85 @@
+service: apro-click-admin-auth
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: auth
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    COGNITO_USER_POOL_ID:
+      Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-id
+    COGNITO_APP_CLIENT_ID:
+      Fn::ImportValue: apro-click-${self:provider.stage}-cognito-app-client-id
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:AdminInitiateAuth
+            - cognito-idp:AdminRespondToAuthChallenge
+            - cognito-idp:AdminGetUser
+          Resource:
+            - Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  login:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/login
+          method: post
+
+  changeFirstTimePassword:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/change-password
+          method: post
+
+  forgotPassword:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/forgot-password
+          method: post
+
+  confirmForgotPassword:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/confirm-forgot-password
+          method: post
+
+  logout:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/logout
+          method: post

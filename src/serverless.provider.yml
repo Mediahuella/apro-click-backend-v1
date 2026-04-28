@@ -1,0 +1,23 @@
+# Configuración compartida del Provider
+# Contiene la configuración base del provider que se repite entre servicios
+
+# Provider completo para importar en cada servicio: provider: ${file(../../serverless.provider.yml):providerBase}
+providerBase:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  # Timeout ajustado a 28s para dejar margen con HTTP API (máximo 30s)
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  # HTTP API: CORS permisivo para desarrollo (sin filtro de orígenes en API Gateway).
+  # Servicios con `provider` inline deben repetir este bloque `httpApi` si no usan providerBase.
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}

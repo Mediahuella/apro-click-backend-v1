@@ -1,0 +1,36 @@
+# Configuración compartida de Package
+# Contiene los patterns y configuraciones de empaquetado para todos los servicios
+
+package:
+  individually: true
+  patterns:
+    # Raíz del servicio = paquete Python (sin src/ anidado); shared/ viene de sync_shared
+    - 'handlers/**/*.py'
+    - 'models/**/*.py'
+    - 'services/**/*.py'
+    - 'utils/**/*.py'
+    - 'shared/**/*.py'
+    # Excluir explícitamente archivos problemáticos
+    - '!**/.requirements.zip'
+    - '!**/*.zip'
+    - '!.requirements.zip'
+    - '!*.zip'
+    - '!**/.serverless/**'
+    - '!**/node_modules/**'
+    - '!**/.venv/**'
+    - '!**/venv/**'
+    - '!**/__pycache__/**'
+    - '!**/*.pyc'
+    - '!**/*.pyo'
+    - '!**/*.pyd'
+    - '!**/.git/**'
+    - '!**/tests/**'
+    - '!**/*.md'
+    - '!**/requirements.txt'
+    - '!**/serverless.yml'
+    - '!**/package.json'
+    - '!**/package-lock.json'
+    - '!**/.DS_Store'
+    - '!**/*.log'
+    - '!**/../../**'
+    - '!**/../../../**'

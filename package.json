@@ -1,0 +1,25 @@
+{
+  "name": "backend-v1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "create:service": "python3 scripts/create_service.py",
+    "shared:sync": "python3 scripts/sync_shared.py",
+    "deploy:all": "python3 scripts/deploy_all.py",
+    "deploy:service": "python3 scripts/deploy_service.py",
+    "sls:service": "python3 scripts/sls_service.py",
+    "db:migrate": "PYTHONPATH=src/shared alembic upgrade head",
+    "db:rollback": "PYTHONPATH=src/shared alembic downgrade -1",
+    "db:generate": "PYTHONPATH=src/shared alembic revision --autogenerate -m",
+    "db:current": "PYTHONPATH=src/shared alembic current",
+    "db:history": "PYTHONPATH=src/shared alembic history"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "serverless": "^4.33.3"
+  }
+}

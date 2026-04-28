@@ -1,0 +1,62 @@
+service: apro-click-admin-orders
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: orders
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    SHOPIFY_CLIENT_SECRET: ${env:SHOPIFY_CLIENT_SECRET, ''}
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2024-10'}
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  orders:
+    handler: handlers/orders.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/orders
+          method: get
+      # Ruta más específica antes que GET /{order_id} (misma convención que en el handler).
+      - httpApi:
+          path: /api/v1/orders/{order_id}/line-images
+          method: get
+      - httpApi:
+          path: /api/v1/orders/{order_id}
+          method: get
+      - httpApi:
+          path: /api/v1/orders/{order_id}
+          method: patch
+
+  shopifyOrdersWebhook:
+    handler: handlers/shopify_webhook.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/orders/shopify/webhook
+          method: post
