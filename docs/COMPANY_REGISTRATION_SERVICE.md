@@ -121,6 +121,8 @@ Para producción conviene fijar la clave y pasarla desde **configuración de la 
 | `shipping_zip` | Ver guía | Código postal. |
 | `shipping_country_code` | No | ISO-2 (ej. `CL`). Default backend `CL` al aprobar. |
 | `shipping_first_name` / `shipping_last_name` | No | Si se omiten, se usan el nombre/apellido del `contact_name`. |
+| `giro` | No | Giro comercial; se guarda en `companies.billing_giro` al aprobar. |
+| `direccion` | No | Dirección de facturación; si se omite, al aprobar se arma desde `shipping_address1`, `shipping_address2` y `shipping_city`. |
 
 Guía detallada (validación UX, ejemplos y admin): [GUIA_FRONTEND_THEME_REGISTRO_EMPRESA.md](./GUIA_FRONTEND_THEME_REGISTRO_EMPRESA.md).
 
@@ -179,9 +181,9 @@ Lo que se guarda en **`company_registration_requests.payload`** (JSON) se usa al
 | *(default)* `shipping_country_code` | `countryCode` | Si no viene en el formulario, al aprobar se usa **`CL`**. |
 | `shop_domain` | No va al GraphQL; sirve para elegir **token** (`shopify_app_installations`) | Muy recomendable; sin tienda resuelta, falla el approve. |
 | Id de la solicitud (UUID) | `company.externalId` | Sí (correlación con tu BD). |
-| `rut`, `company_type`, `payment_type`, `notes`, `source` | **No** se envían hoy a Shopify | Solo negocio en PostgreSQL. Si hace falta RUT o notas en Admin Shopify, habría que mapearlos a `company.note`, metafields o similar. |
+| `rut`, `company_type`, `payment_type`, `notes`, `source` | **RUT** y **`giro`** / **`direccion`** (o dirección derivada de envío) se persisten en PostgreSQL en **`companies.billing_*`** al aprobar. No se envían tal cual a `companyCreate`. |
 
-**Conclusión:** para **`companyCreate`** el formulario **sí cubre** lo que la API exige como mínimo típico (empresa + contacto + ubicación con dirección), **siempre que** la dirección completa esté en el payload al aprobar. Lo que **no** replica en Shopify son RUT, tipo de empresa y tipo de pago del formulario: siguen solo en tu modelo `companies` / solicitud.
+**Conclusión:** para **`companyCreate`** el formulario **sí cubre** lo que la API exige como mínimo típico (empresa + contacto + ubicación con dirección), **siempre que** la dirección completa esté en el payload al aprobar. **RUT, giro y dirección fiscal** (o dirección compuesta desde envío) se guardan en **`companies.billing_*`** al aprobar; **tipo de empresa**, **tipo de pago** y **notas** siguen en `companies` / fila de solicitud y no van a Shopify salvo que se mapeen después (metafields, etc.).
 
 **Riesgos puntuales (no son de “campos faltantes” en BD):** tienda no Plus, scopes, `countryCode` / `zoneCode` que Shopify rechace para ciertos países, o `userErrors` de políticas B2B de la tienda; en esos casos el error viene de GraphQL tras el approve.
 

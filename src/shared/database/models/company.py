@@ -38,6 +38,18 @@ class Company(Base, TimestampMixin, DictMixin):
     shopify_company_id: Mapped[str | None] = mapped_column(
         String, nullable=True
     )
+    billing_documento: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    billing_rut: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    billing_razon_social: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    billing_giro: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    billing_region: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    billing_direccion: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
 
     # relationships
     users = relationship("User", back_populates="company")

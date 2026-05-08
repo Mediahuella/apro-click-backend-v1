@@ -52,3 +52,13 @@ functions:
       - httpApi:
           path: /api/v1/shopify/oauth/callback
           method: get
+
+  checkoutBillingMetadata:
+    handler: handlers/checkout_billing_metadata.lambda_handler
+    events:
+      - httpApi:
+          path: /api/checkout/billing-metadata
+          method: post
+      - httpApi:
+          path: /api/checkout/billing-metadata
+          method: options

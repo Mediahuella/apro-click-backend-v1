@@ -35,6 +35,7 @@ from database.models.registration_request import (  # noqa: E402
 )
 from utils.rut import format_rut_stored  # noqa: E402
 from utils.shipping_payload import (  # noqa: E402
+    canonical_shipping_payload,
     merge_body_shipping_into_payload,
     shipping_for_shopify_b2b,
 )
@@ -122,6 +123,8 @@ def _serialize_request(req: CompanyRegistrationRequest) -> dict[str, Any]:
         "shipping_country_code": payload.get("shipping_country_code"),
         "shipping_first_name": payload.get("shipping_first_name"),
         "shipping_last_name": payload.get("shipping_last_name"),
+        "giro": payload.get("giro"),
+        "direccion": payload.get("direccion"),
     }
     return out
 
@@ -168,6 +171,13 @@ class RegistrationRequestService:
             payload["notes"] = notes.strip()
         if isinstance(shop_domain, str) and shop_domain.strip():
             payload["shop_domain"] = shop_domain.strip()
+
+        giro = body.get("giro")
+        if isinstance(giro, str) and giro.strip():
+            payload["giro"] = giro.strip()
+        direccion = body.get("direccion")
+        if isinstance(direccion, str) and direccion.strip():
+            payload["direccion"] = direccion.strip()
 
         payload = merge_body_shipping_into_payload(payload, body)
 
@@ -289,11 +299,29 @@ class RegistrationRequestService:
             if not req2 or req2.status != "PENDING":
                 raise ValueError("La solicitud cambió de estado; reintente")
 
+            merged = canonical_shipping_payload(payload)
+            billing_rut = (payload.get("rut") or "").strip() or None
+            billing_giro = (payload.get("giro") or "").strip() or None
+            billing_direccion = (payload.get("direccion") or "").strip()
+            if not billing_direccion:
+                a1 = (merged.get("shipping_address1") or "").strip()
+                a2 = (merged.get("shipping_address2") or "").strip()
+                ciudad = (merged.get("shipping_city") or "").strip()
+                parts = [p for p in (a1, a2, ciudad) if p]
+                billing_direccion = ", ".join(parts) if parts else ""
+            billing_direccion = billing_direccion.strip() or None
+            billing_region = (merged.get("shipping_zone_code") or "").strip() or None
+
             company = Company(
                 name=company_name,
                 company_type=company_type,
                 payment_type=payment_type,
                 shopify_company_id=shopify_company_id,
+                billing_rut=billing_rut,
+                billing_razon_social=company_name,
+                billing_giro=billing_giro,
+                billing_direccion=billing_direccion,
+                billing_region=billing_region,
             )
             session.add(company)
             session.flush()

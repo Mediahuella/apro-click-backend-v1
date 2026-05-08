@@ -42,6 +42,15 @@ Esta guía describe cómo implementar en **Shopify Theme App Extension** (formul
 | `shop_domain` | Muy recomendado | Ej. `mi-tienda.myshopify.com`. Permite elegir la instalación correcta al aprobar (token en `shopify_app_installations`). |
 | `source` | No | Default `shopify_theme`. Útil para distinguir canal (theme vs otra app). |
 
+#### Facturación (opcional; se guardan en `companies.billing_*` al **aprobar**)
+
+| Campo | Obligatorio (backend) | Notas |
+|-------|------------------------|--------|
+| `giro` | No | Giro comercial → `companies.billing_giro`. |
+| `direccion` | No | Dirección de facturación. Si se omite, al aprobar se usa una línea armada con `shipping_address1`, `shipping_address2` y `shipping_city` (cuando existan en el payload). |
+
+El **RUT** ya se envía como `rut` (obligatoria) y se persiste en `companies.billing_rut` al aprobar. `company_name` queda también como `billing_razon_social` al crear la empresa.
+
 #### Dirección de envío (B2B — nueva ubicación en Shopify)
 
 Recomendación UX: tratar como **obligatorios** en el formulario.

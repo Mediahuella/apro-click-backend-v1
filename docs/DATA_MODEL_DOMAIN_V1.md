@@ -88,6 +88,13 @@ company_registration_requests
 | `company_type` | SMALL \| MEDIUM \| BIG. |
 | `payment_type` | DIRECT \| CREDIT. |
 | `is_system` | `true` solo para la compañía plataforma (Apro). |
+| `shopify_company_id` | Id numérico de **Company** en Shopify B2B (texto); permite resolver facturación desde checkout. |
+| `billing_documento` | Ej. Factura / Boleta; va a note attribute `Documento` si está relleno (migración 016). |
+| `billing_rut` | Rut facturación → `Rut`. |
+| `billing_razon_social` | Si NULL, checkout puede usar `name` como `Razon Social`. |
+| `billing_giro` | → `Giro`. |
+| `billing_region` | → `Region`. |
+| `billing_direccion` | → `Dirección`. |
 | `created_at`, `updated_at` | `timestamptz`. |
 
 *Seed: crear la compañía Apro con `is_system = true` en migración o script de arranque.*
