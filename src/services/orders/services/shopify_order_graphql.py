@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import json
-import os
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+from utils.shopify_graphql import (
+    format_user_errors as _format_user_errors,
+    graphql_call as _graphql,
+    shopify_api_version as _api_version,
+)
 
 _ORDER_EDIT_BEGIN = """
 mutation orderEditBegin($id: ID!) {
@@ -124,64 +129,41 @@ mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
 }
 """
 
-
-def _api_version() -> str:
-    return (os.environ.get("SHOPIFY_API_VERSION") or "2024-10").strip()
-
-
-def _graphql(
-    shop_domain: str, access_token: str, query: str, variables: dict[str, Any]
-) -> dict[str, Any]:
-    shop = shop_domain.strip().lower()
-    ver = _api_version()
-    url = f"https://{shop}/admin/api/{ver}/graphql.json"
-    payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
-    req = Request(
-        url,
-        data=payload,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-Shopify-Access-Token": access_token,
-        },
-    )
-    try:
-        with urlopen(req, timeout=25) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as e:
-        try:
-            detail = e.read().decode("utf-8", errors="replace")
-        except OSError:
-            detail = str(e.code)
-        raise ValueError(f"Shopify HTTP {e.code}: {detail[:500]}") from e
-    except (OSError, json.JSONDecodeError, UnicodeError) as e:
-        raise ValueError(f"Error llamando a Shopify GraphQL: {e}") from e
-
-    if not isinstance(body, dict):
-        raise ValueError("Respuesta GraphQL inválida")
-    errs = body.get("errors")
-    if isinstance(errs, list) and errs:
-        parts = []
-        for e in errs:
-            if isinstance(e, dict):
-                parts.append(str(e.get("message") or e))
-            else:
-                parts.append(str(e))
-        raise ValueError("Shopify: " + "; ".join(parts)[:2000])
-    data = body.get("data")
-    if not isinstance(data, dict):
-        raise ValueError("GraphQL sin data")
-    return data
+_ORDER_INVOICE_SEND = """
+mutation orderInvoiceSend($id: ID!, $email: EmailInput) {
+  orderInvoiceSend(id: $id, email: $email) {
+    order { id }
+    userErrors { field message }
+  }
+}
+"""
 
 
-def _format_user_errors(errs: list[Any]) -> str:
-    parts: list[str] = []
-    for e in errs:
-        if isinstance(e, dict):
-            parts.append(str(e.get("message") or e))
-        else:
-            parts.append(str(e))
-    return "; ".join(parts) if parts else "error desconocido"
+def send_order_invoice_via_shopify(
+    shop_domain: str,
+    access_token: str,
+    shopify_order_id: str,
+    *,
+    email: dict[str, Any] | None = None,
+) -> None:
+    """Dispara ``orderInvoiceSend`` en Shopify para el pedido dado.
+
+    Si ``email`` es ``None``, Shopify usa la dirección del cliente registrada
+    en el pedido y la plantilla por defecto. Lanza ``ValueError`` con detalle
+    si Shopify retorna ``userErrors``.
+    """
+    oid = str(shopify_order_id).strip()
+    if not oid:
+        raise ValueError("shopify_order_id vacío")
+    order_gid = f"gid://shopify/Order/{oid}"
+    variables: dict[str, Any] = {"id": order_gid}
+    if email is not None:
+        variables["email"] = email
+    data = _graphql(shop_domain, access_token, _ORDER_INVOICE_SEND, variables)
+    payload = data.get("orderInvoiceSend") or {}
+    uerr = payload.get("userErrors") or []
+    if uerr:
+        raise ValueError(_format_user_errors(uerr))
 
 
 def _parse_money(amount: Any) -> Decimal:

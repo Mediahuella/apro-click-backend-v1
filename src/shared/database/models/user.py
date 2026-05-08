@@ -81,10 +81,8 @@ class User(Base, TimestampMixin, DictMixin):
     shopify_staff_member_id: Mapped[str | None] = mapped_column(
         String, nullable=True
     )
-    #: LINKED | NOT_FOUND | SKIPPED_ROLE | SKIPPED_NO_SHOP | ERROR (ver utils shopify staff).
-    shopify_staff_link_status: Mapped[str | None] = mapped_column(
-        String, nullable=True
-    )
+    #: Código SAP (obligatorio en API si ``role`` es ``SALES``; puede ser NULL si el rol no es ventas).
+    codigo_sap: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # relationships
     company = relationship("Company", back_populates="users")

@@ -130,9 +130,9 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{newUserEmail}}\",\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"temporary_password\": \"{{temporaryPassword}}\"\n}"
+              "raw": "{\n  \"email\": \"{{newUserEmail}}\",\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"codigo_sap\": \"VEND-001\",\n  \"temporary_password\": \"{{temporaryPassword}}\"\n}"
             },
-            "description": "Roles válidos: SUPERADMIN, ADMIN, SALES, KPI_VISUALIZERS. temporary_password es opcional.",
+            "description": "Roles válidos: SUPERADMIN, ADMIN, SALES, KPI_VISUALIZERS. Si role es SALES, codigo_sap es obligatorio (texto no vacío). temporary_password es opcional.",
             "url": "{{baseUrlUsers}}/api/v1/users"
           }
         },
@@ -180,7 +180,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"status\": \"ACTIVE\"\n}"
+              "raw": "{\n  \"given_name\": \"Nombre\",\n  \"family_name\": \"Apellido\",\n  \"role\": \"SALES\",\n  \"codigo_sap\": \"VEND-001\",\n  \"status\": \"ACTIVE\"\n}"
             },
             "url": "{{baseUrlUsers}}/api/v1/users/{{userSub}}"
           }

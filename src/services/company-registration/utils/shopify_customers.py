@@ -445,17 +445,19 @@ def _build_company_location_input(
     contact_phone: str | None,
     shipping: dict[str, Any],
 ) -> dict[str, Any]:
-    """`shipping` incluye address1, city, zip, country_code (ISO-2), y opcionales address2, zone_code."""
+    """`shipping` incluye address1, city, country_code (ISO-2); zip y address2 opcionales."""
     fn = (shipping_first_name or "").strip() or "—"
     ln = (shipping_last_name or "").strip() or "—"
+    zip_val = str(shipping.get("zip") or "").strip()
     addr: dict[str, Any] = {
         "firstName": fn,
         "lastName": ln,
         "address1": shipping["address1"].strip(),
         "city": shipping["city"].strip(),
-        "zip": shipping["zip"].strip(),
         "countryCode": shipping["country_code"].strip().upper(),
     }
+    if zip_val:
+        addr["zip"] = zip_val
     if shipping.get("address2"):
         addr["address2"] = str(shipping["address2"]).strip()
     if shipping.get("zone_code"):
@@ -511,7 +513,7 @@ def ensure_shopify_b2b_company(
       y enlaza con `companyAssignCustomerAsContact`.
     - Si no existe, usa `companyCreate` con `companyContact` + `companyLocation` (Shopify crea el cliente).
 
-    `shipping` debe incluir al menos: address1, city, zip, country_code (ISO-2).
+    `shipping` debe incluir al menos: address1, city, country_code (ISO-2). `zip` es opcional.
     """
     email = (contact_email or "").strip()
     if not email:

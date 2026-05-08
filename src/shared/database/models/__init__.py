@@ -10,6 +10,7 @@ from database.models.conversation import Conversation
 from database.models.message import Message
 from database.models.shopify import ShopifyAppInstallation
 from database.models.shopify_order import ShopifyOrder
+from database.models.price_list import PriceListUpload, ShopifyPriceSegment
 
 __all__ = [
     "Company",
@@ -22,4 +23,6 @@ __all__ = [
     "Message",
     "ShopifyAppInstallation",
     "ShopifyOrder",
+    "PriceListUpload",
+    "ShopifyPriceSegment",
 ]

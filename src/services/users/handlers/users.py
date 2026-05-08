@@ -51,6 +51,9 @@ def create_user():
         family_name = body.get("family_name", "")
         role = body.get("role", "SALES")
         temporary_password = body.get("temporary_password")
+        codigo_sap = body.get("codigo_sap")
+        if codigo_sap is not None and not isinstance(codigo_sap, str):
+            raise BadRequestError("'codigo_sap' debe ser texto cuando se envía")
         if not email:
             raise BadRequestError("'email' is required")
 
@@ -66,6 +69,7 @@ def create_user():
             role=role,
             temporary_password=temporary_password,
             company_ids=company_ids,
+            codigo_sap=codigo_sap,
         )
         return {"statusCode": 201, "message": "User created", "data": result}
 
@@ -115,6 +119,10 @@ def update_user(user_id: str):
         body = app.current_event.json_body or {}
         if not body:
             raise BadRequestError("Request body is required")
+        if "codigo_sap" in body and body.get("codigo_sap") is not None and not isinstance(
+            body.get("codigo_sap"), str
+        ):
+            raise BadRequestError("'codigo_sap' debe ser texto cuando se envía")
 
         result = user_service.update_user(user_id, body)
         return {"statusCode": 200, "message": "User updated", "data": result}

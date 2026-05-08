@@ -1,0 +1,2552 @@
+{
+  "ACHAO": {
+    "display_name": "ACHAO",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "ALERCE": {
+    "display_name": "ALERCE",
+    "sucursal": "PMC",
+    "zona": "ZI"
+  },
+  "ALGARROBITO": {
+    "display_name": "ALGARROBITO",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "ALGARROBO": {
+    "display_name": "ALGARROBO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "ALHUE": {
+    "display_name": "ALHUE",
+    "sucursal": "SCL",
+    "zona": "ME"
+  },
+  "ALTO BIO BIO": {
+    "display_name": "ALTO BIO BIO",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "ALTO DEL CARMEN": {
+    "display_name": "ALTO DEL CARMEN",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "ALTO HOSPICIO": {
+    "display_name": "ALTO HOSPICIO",
+    "sucursal": "IQQ",
+    "zona": "B"
+  },
+  "ALTO JAHUEL": {
+    "display_name": "ALTO JAHUEL",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "ANCUD": {
+    "display_name": "ANCUD",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "ANDACOLLO": {
+    "display_name": "ANDACOLLO",
+    "sucursal": "LSC",
+    "zona": "ZE"
+  },
+  "ANGOL": {
+    "display_name": "ANGOL",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "ANGOSTURA": {
+    "display_name": "ANGOSTURA",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "ANTOFAGASTA": {
+    "display_name": "ANTOFAGASTA",
+    "sucursal": "ANF",
+    "zona": "B"
+  },
+  "ANTUCO": {
+    "display_name": "ANTUCO",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "ARAUCO": {
+    "display_name": "ARAUCO",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "ARICA": {
+    "display_name": "ARICA",
+    "sucursal": "ARI",
+    "zona": "B"
+  },
+  "ARTIFICIO": {
+    "display_name": "ARTIFICIO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "BAHIA INGLESA": {
+    "display_name": "BAHIA INGLESA",
+    "sucursal": "CPO",
+    "zona": "ZE"
+  },
+  "BAQUEDANO": {
+    "display_name": "BAQUEDANO",
+    "sucursal": "ANF",
+    "zona": "ZE"
+  },
+  "BARRANCAS": {
+    "display_name": "BARRANCAS",
+    "sucursal": "VAP",
+    "zona": "ME"
+  },
+  "BATUCO": {
+    "display_name": "BATUCO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "BOLLENAR": {
+    "display_name": "BOLLENAR",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "BUCALEMU": {
+    "display_name": "BUCALEMU",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "BUIN": {
+    "display_name": "BUIN",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "BULNES": {
+    "display_name": "BULNES",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "CABILDO": {
+    "display_name": "CABILDO",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "CABRERO": {
+    "display_name": "CABRERO",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "CACHAGUA": {
+    "display_name": "CACHAGUA",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "CAHUIL": {
+    "display_name": "CAHUIL",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "CAJON": {
+    "display_name": "CAJON",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "CALAMA": {
+    "display_name": "CALAMA",
+    "sucursal": "CJC",
+    "zona": "B"
+  },
+  "CALBUCO": {
+    "display_name": "CALBUCO",
+    "sucursal": "PMC",
+    "zona": "ZI"
+  },
+  "CALDERA": {
+    "display_name": "CALDERA",
+    "sucursal": "CPO",
+    "zona": "ZE"
+  },
+  "CALERA DE TANGO": {
+    "display_name": "CALERA DE TANGO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "CALLE LARGA": {
+    "display_name": "CALLE LARGA",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "CAMINA": {
+    "display_name": "CAMINA",
+    "sucursal": "IQQ",
+    "zona": "ME"
+  },
+  "CAMPANARIO": {
+    "display_name": "CAMPANARIO",
+    "sucursal": "YAI",
+    "zona": "ME"
+  },
+  "CANCURA": {
+    "display_name": "CANCURA",
+    "sucursal": "ZOS",
+    "zona": "B"
+  },
+  "CANELA": {
+    "display_name": "CANELA",
+    "sucursal": "LVL",
+    "zona": "ZE"
+  },
+  "CANELA ALTA": {
+    "display_name": "CANELA ALTA",
+    "sucursal": "LVL",
+    "zona": "ZE"
+  },
+  "CANELA BAJA": {
+    "display_name": "CANELA BAJA",
+    "sucursal": "LVL",
+    "zona": "ZE"
+  },
+  "CANETE": {
+    "display_name": "CANETE",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "CAPITAN PASTENE": {
+    "display_name": "CAPITAN PASTENE",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "CARAHUE": {
+    "display_name": "CARAHUE",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "CARAMPANGUE": {
+    "display_name": "CARAMPANGUE",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "CARTAGENA": {
+    "display_name": "CARTAGENA",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "CASABLANCA": {
+    "display_name": "CASABLANCA",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "CASTRO": {
+    "display_name": "CASTRO",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "CATAPILCO": {
+    "display_name": "CATAPILCO",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "CATEMU": {
+    "display_name": "CATEMU",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "CATO": {
+    "display_name": "CATO",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "CAUQUENES": {
+    "display_name": "CAUQUENES",
+    "sucursal": "ZCA",
+    "zona": "ME"
+  },
+  "CAYUMAPU": {
+    "display_name": "CAYUMAPU",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "CAYURRUCA": {
+    "display_name": "CAYURRUCA",
+    "sucursal": "ZOS",
+    "zona": "ZE"
+  },
+  "CERRILLOS": {
+    "display_name": "CERRILLOS",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "CERRO MORENO": {
+    "display_name": "CERRO MORENO",
+    "sucursal": "ANF",
+    "zona": "B"
+  },
+  "CERRO NAVIA": {
+    "display_name": "CERRO NAVIA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "CHAITEN": {
+    "display_name": "CHAITEN",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "CHAMPA": {
+    "display_name": "CHAMPA",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "CHANARAL": {
+    "display_name": "CHANARAL",
+    "sucursal": "CPO",
+    "zona": "ZE"
+  },
+  "CHANCO": {
+    "display_name": "CHANCO",
+    "sucursal": "ZCA",
+    "zona": "ME"
+  },
+  "CHEPICA": {
+    "display_name": "CHEPICA",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "CHICUREO": {
+    "display_name": "CHICUREO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "CHIGUAYANTE": {
+    "display_name": "CHIGUAYANTE",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "CHILE CHICO": {
+    "display_name": "CHILE CHICO",
+    "sucursal": "GXQ",
+    "zona": "ME"
+  },
+  "CHILLAN": {
+    "display_name": "CHILLAN",
+    "sucursal": "YAI",
+    "zona": "B"
+  },
+  "CHILLAN VIEJO": {
+    "display_name": "CHILLAN VIEJO",
+    "sucursal": "YAI",
+    "zona": "B"
+  },
+  "CHILLEPIN": {
+    "display_name": "CHILLEPIN",
+    "sucursal": "LVL",
+    "zona": "ME"
+  },
+  "CHIMBARONGO": {
+    "display_name": "CHIMBARONGO",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "CHINQUIHUE": {
+    "display_name": "CHINQUIHUE",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "CHOL CHOL": {
+    "display_name": "CHOL CHOL",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "CHONCHI": {
+    "display_name": "CHONCHI",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "CIRUELOS": {
+    "display_name": "CIRUELOS",
+    "sucursal": "ZAL",
+    "zona": "ZE"
+  },
+  "COBQUECURA": {
+    "display_name": "COBQUECURA",
+    "sucursal": "YAI",
+    "zona": "ME"
+  },
+  "COCHAMO": {
+    "display_name": "COCHAMO",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "CODEGUA": {
+    "display_name": "CODEGUA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "CODIGUA": {
+    "display_name": "CODIGUA",
+    "sucursal": "SCL",
+    "zona": "ME"
+  },
+  "COELEMU": {
+    "display_name": "COELEMU",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "COIHUE": {
+    "display_name": "COIHUE",
+    "sucursal": "LSQ",
+    "zona": "B"
+  },
+  "COIHUECO": {
+    "display_name": "COIHUECO",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "COINCO": {
+    "display_name": "COINCO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "COLBUN": {
+    "display_name": "COLBUN",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "COLCURA": {
+    "display_name": "COLCURA",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "COLEGUAL": {
+    "display_name": "COLEGUAL",
+    "sucursal": "PMC",
+    "zona": "ZI"
+  },
+  "COLINA": {
+    "display_name": "COLINA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "COLLIPULLI": {
+    "display_name": "COLLIPULLI",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "COLOSO": {
+    "display_name": "COLOSO",
+    "sucursal": "ANF",
+    "zona": "B"
+  },
+  "COLTAUCO": {
+    "display_name": "COLTAUCO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "COMBARBALA": {
+    "display_name": "COMBARBALA",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "CONARIPE": {
+    "display_name": "CONARIPE",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "CONCEPCION": {
+    "display_name": "CONCEPCION",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "CONCHALI": {
+    "display_name": "CONCHALI",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "CONCON": {
+    "display_name": "CONCON",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "CONSTITUCION": {
+    "display_name": "CONSTITUCION",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "CONTULMO": {
+    "display_name": "CONTULMO",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "COPEQUEN": {
+    "display_name": "COPEQUEN",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "COPIAPO": {
+    "display_name": "COPIAPO",
+    "sucursal": "CPO",
+    "zona": "B"
+  },
+  "COQUIMBO": {
+    "display_name": "COQUIMBO",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "CORONEL": {
+    "display_name": "CORONEL",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "CORRAL": {
+    "display_name": "CORRAL",
+    "sucursal": "ZAL",
+    "zona": "ME"
+  },
+  "COSTA AZUL": {
+    "display_name": "COSTA AZUL",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "COYHAIQUE": {
+    "display_name": "COYHAIQUE",
+    "sucursal": "GXQ",
+    "zona": "B"
+  },
+  "CUCAO": {
+    "display_name": "CUCAO",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "CUMPEO": {
+    "display_name": "CUMPEO",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "CUNACO": {
+    "display_name": "CUNACO",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "CUNCO": {
+    "display_name": "CUNCO",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "CUNCUMEN": {
+    "display_name": "CUNCUMEN",
+    "sucursal": "LVL",
+    "zona": "ME"
+  },
+  "CURACAUTIN": {
+    "display_name": "CURACAUTIN",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "CURACAVI": {
+    "display_name": "CURACAVI",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "CURACO DE VELEZ": {
+    "display_name": "CURACO DE VELEZ",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "CURANILAHUE": {
+    "display_name": "CURANILAHUE",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "CURANIPE": {
+    "display_name": "CURANIPE",
+    "sucursal": "ZCA",
+    "zona": "ME"
+  },
+  "CURARREHUE": {
+    "display_name": "CURARREHUE",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "CURAUMA": {
+    "display_name": "CURAUMA",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "CUREPTO": {
+    "display_name": "CUREPTO",
+    "sucursal": "ZCA",
+    "zona": "ZE"
+  },
+  "CURICO": {
+    "display_name": "CURICO",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "CURIMON": {
+    "display_name": "CURIMON",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "DALCAHUE": {
+    "display_name": "DALCAHUE",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "DICHATO": {
+    "display_name": "DICHATO",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "DIEGO DE ALMAGRO": {
+    "display_name": "DIEGO DE ALMAGRO",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "DONIHUE": {
+    "display_name": "DONIHUE",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "DUAO": {
+    "display_name": "DUAO",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "EL BELLOTO": {
+    "display_name": "EL BELLOTO",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "EL BOSQUE": {
+    "display_name": "EL BOSQUE",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "EL CARMEN": {
+    "display_name": "EL CARMEN",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "EL MANZANO LAGO RAPEL": {
+    "display_name": "EL MANZANO (LAGO RAPEL)",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "EL MELON": {
+    "display_name": "EL MELON",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "EL MONTE": {
+    "display_name": "EL MONTE",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "EL PAICO": {
+    "display_name": "EL PAICO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "EL QUISCO": {
+    "display_name": "EL QUISCO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "EL SALADO": {
+    "display_name": "EL SALADO",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "EL SALTO DEL LAJA": {
+    "display_name": "EL SALTO DEL LAJA",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "EL SALVADOR": {
+    "display_name": "EL SALVADOR",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "EL TABO": {
+    "display_name": "EL TABO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "EL TEPUAL": {
+    "display_name": "EL TEPUAL",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "EL TRAPICHE": {
+    "display_name": "EL TRAPICHE",
+    "sucursal": "LSC",
+    "zona": "ZE"
+  },
+  "EMPEDRADO": {
+    "display_name": "EMPEDRADO",
+    "sucursal": "ZCA",
+    "zona": "ME"
+  },
+  "ENSENADA": {
+    "display_name": "ENSENADA",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "ENTRE LAGOS": {
+    "display_name": "ENTRE LAGOS",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "ERCILLA": {
+    "display_name": "ERCILLA",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "ESTACION CENTRAL": {
+    "display_name": "ESTACION CENTRAL",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "FLORIDA": {
+    "display_name": "FLORIDA",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "FREIRE": {
+    "display_name": "FREIRE",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "FREIRINA": {
+    "display_name": "FREIRINA",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "FRESIA": {
+    "display_name": "FRESIA",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "FRUTILLAR": {
+    "display_name": "FRUTILLAR",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "FUTALEUFU": {
+    "display_name": "FUTALEUFU",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "FUTRONO": {
+    "display_name": "FUTRONO",
+    "sucursal": "ZAL",
+    "zona": "ZE"
+  },
+  "GALVARINO": {
+    "display_name": "GALVARINO",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "GORBEA": {
+    "display_name": "GORBEA",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "GRANEROS": {
+    "display_name": "GRANEROS",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "GUACOLDA": {
+    "display_name": "GUACOLDA",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "GUANAQUEROS": {
+    "display_name": "GUANAQUEROS",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "GULTRO": {
+    "display_name": "GULTRO",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "HIJUELAS": {
+    "display_name": "HIJUELAS",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "HORNOPIREN": {
+    "display_name": "HORNOPIREN",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "HOSPITAL": {
+    "display_name": "HOSPITAL",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "HUALANE": {
+    "display_name": "HUALANE",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "HUALLILLINGA": {
+    "display_name": "HUALLILLINGA",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "HUALPEN": {
+    "display_name": "HUALPEN",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "HUALPENCILLO": {
+    "display_name": "HUALPENCILLO",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "HUALPIN": {
+    "display_name": "HUALPIN",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "HUALQUI": {
+    "display_name": "HUALQUI",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "HUARA": {
+    "display_name": "HUARA",
+    "sucursal": "IQQ",
+    "zona": "ZE"
+  },
+  "HUASCO": {
+    "display_name": "HUASCO",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "HUASCO BAJO": {
+    "display_name": "HUASCO BAJO",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "HUECHURABA": {
+    "display_name": "HUECHURABA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "HUENTELAUQUEN": {
+    "display_name": "HUENTELAUQUEN",
+    "sucursal": "LVL",
+    "zona": "ZE"
+  },
+  "HUEPIL": {
+    "display_name": "HUEPIL",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "HUERTOS FAMILIARES": {
+    "display_name": "HUERTOS FAMILIARES",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "ILLAPEL": {
+    "display_name": "ILLAPEL",
+    "sucursal": "LVL",
+    "zona": "ZI"
+  },
+  "ILOCA": {
+    "display_name": "ILOCA",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "INCA DE ORO": {
+    "display_name": "INCA DE ORO",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "INDEPENDENCIA": {
+    "display_name": "INDEPENDENCIA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "IQUIQUE": {
+    "display_name": "IQUIQUE",
+    "sucursal": "IQQ",
+    "zona": "B"
+  },
+  "ISLA DE MAIPO": {
+    "display_name": "ISLA DE MAIPO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "ISLA NEGRA": {
+    "display_name": "ISLA NEGRA",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "LA CALERA": {
+    "display_name": "LA CALERA",
+    "sucursal": "ZLC",
+    "zona": "B"
+  },
+  "LA CISTERNA": {
+    "display_name": "LA CISTERNA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA COMPANIA": {
+    "display_name": "LA COMPANIA",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "LA CRUZ": {
+    "display_name": "LA CRUZ",
+    "sucursal": "ZLC",
+    "zona": "B"
+  },
+  "LA DEHESA": {
+    "display_name": "LA DEHESA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA ESTRELLA": {
+    "display_name": "LA ESTRELLA",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "LA FLORIDA": {
+    "display_name": "LA FLORIDA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA GRANJA": {
+    "display_name": "LA GRANJA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA HERRADURA": {
+    "display_name": "LA HERRADURA",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "LA HIGUERA": {
+    "display_name": "LA HIGUERA",
+    "sucursal": "LSC",
+    "zona": "ZE"
+  },
+  "LA HUAYCA": {
+    "display_name": "LA HUAYCA",
+    "sucursal": "IQQ",
+    "zona": "ZE"
+  },
+  "LA LIGUA": {
+    "display_name": "LA LIGUA",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "LA MONTANA": {
+    "display_name": "LA MONTANA",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "LA NEGRA": {
+    "display_name": "LA NEGRA",
+    "sucursal": "ANF",
+    "zona": "ZI"
+  },
+  "LA PINTANA": {
+    "display_name": "LA PINTANA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA REINA": {
+    "display_name": "LA REINA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LA SERENA": {
+    "display_name": "LA SERENA",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "LA TIRANA": {
+    "display_name": "LA TIRANA",
+    "sucursal": "IQQ",
+    "zona": "ZE"
+  },
+  "LA UNION": {
+    "display_name": "LA UNION",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "LABRANZA": {
+    "display_name": "LABRANZA",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "LAGO RANCO": {
+    "display_name": "LAGO RANCO",
+    "sucursal": "ZOS",
+    "zona": "ZE"
+  },
+  "LAGUNA VERDE": {
+    "display_name": "LAGUNA VERDE",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "LAJA": {
+    "display_name": "LAJA",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "LAMPA": {
+    "display_name": "LAMPA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LANCO": {
+    "display_name": "LANCO",
+    "sucursal": "ZAL",
+    "zona": "ZE"
+  },
+  "LARAQUETE": {
+    "display_name": "LARAQUETE",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "LAS BARRANCAS": {
+    "display_name": "LAS BARRANCAS",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "LAS CABRAS": {
+    "display_name": "LAS CABRAS",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "LAS CONDES": {
+    "display_name": "LAS CONDES",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LAS CRUCES": {
+    "display_name": "LAS CRUCES",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "LAS TACAS": {
+    "display_name": "LAS TACAS",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "LAS VENTANAS": {
+    "display_name": "LAS VENTANAS",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "LAUTARO": {
+    "display_name": "LAUTARO",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "LEBU": {
+    "display_name": "LEBU",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "LENGA": {
+    "display_name": "LENGA",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "LICAN RAY": {
+    "display_name": "LICAN RAY",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "LICANTEN": {
+    "display_name": "LICANTEN",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "LIMACHE": {
+    "display_name": "LIMACHE",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "LINARES": {
+    "display_name": "LINARES",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "LIRQUEN": {
+    "display_name": "LIRQUEN",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "LITUECHE": {
+    "display_name": "LITUECHE",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "LLANQUIHUE": {
+    "display_name": "LLANQUIHUE",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "LLAYLLAY": {
+    "display_name": "LLAYLLAY",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "LLIFEN": {
+    "display_name": "LLIFEN",
+    "sucursal": "ZAL",
+    "zona": "ME"
+  },
+  "LLOLLEO": {
+    "display_name": "LLOLLEO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "LLUTA": {
+    "display_name": "LLUTA",
+    "sucursal": "ARI",
+    "zona": "ZI"
+  },
+  "LO ABARCA": {
+    "display_name": "LO ABARCA",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "LO BARNECHEA": {
+    "display_name": "LO BARNECHEA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LO ESPEJO": {
+    "display_name": "LO ESPEJO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LO MIRANDA": {
+    "display_name": "LO MIRANDA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "LO PRADO": {
+    "display_name": "LO PRADO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "LOLOL": {
+    "display_name": "LOLOL",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "LONCOCHE": {
+    "display_name": "LONCOCHE",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "LONGAVI": {
+    "display_name": "LONGAVI",
+    "sucursal": "ZCA",
+    "zona": "ZE"
+  },
+  "LONQUEN": {
+    "display_name": "LONQUEN",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "LONQUIMAY": {
+    "display_name": "LONQUIMAY",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "LONTUE": {
+    "display_name": "LONTUE",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "LOS ALAMOS": {
+    "display_name": "LOS ALAMOS",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "LOS ANDES": {
+    "display_name": "LOS ANDES",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "LOS ANGELES": {
+    "display_name": "LOS ANGELES",
+    "sucursal": "LSQ",
+    "zona": "B"
+  },
+  "LOS CHILCOS": {
+    "display_name": "LOS CHILCOS",
+    "sucursal": "ZAL",
+    "zona": "ZE"
+  },
+  "LOS CIPRESES": {
+    "display_name": "LOS CIPRESES",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "LOS LAGOS": {
+    "display_name": "LOS LAGOS",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "LOS LIRIOS": {
+    "display_name": "LOS LIRIOS",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "LOS LOROS": {
+    "display_name": "LOS LOROS",
+    "sucursal": "CPO",
+    "zona": "ZE"
+  },
+  "LOS MAITENES": {
+    "display_name": "LOS MAITENES",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "LOS MOLINOS": {
+    "display_name": "LOS MOLINOS",
+    "sucursal": "ZAL",
+    "zona": "B"
+  },
+  "LOS MOLLES": {
+    "display_name": "LOS MOLLES",
+    "sucursal": "LVL",
+    "zona": "ZI"
+  },
+  "LOS MUERMOS": {
+    "display_name": "LOS MUERMOS",
+    "sucursal": "PMC",
+    "zona": "ZI"
+  },
+  "LOS NICHES": {
+    "display_name": "LOS NICHES",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "LOS QUENES": {
+    "display_name": "LOS QUENES",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "LOS SAUCES": {
+    "display_name": "LOS SAUCES",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "LOS VILOS": {
+    "display_name": "LOS VILOS",
+    "sucursal": "LVL",
+    "zona": "B"
+  },
+  "LOTA": {
+    "display_name": "LOTA",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "LUMACO": {
+    "display_name": "LUMACO",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "MACHALI": {
+    "display_name": "MACHALI",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "MACUL": {
+    "display_name": "MACUL",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "MAFIL": {
+    "display_name": "MAFIL",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "MAIPO": {
+    "display_name": "MAIPO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "MAIPU": {
+    "display_name": "MAIPU",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "MAITENCILLO": {
+    "display_name": "MAITENCILLO",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "MALALHUE": {
+    "display_name": "MALALHUE",
+    "sucursal": "ZAL",
+    "zona": "ME"
+  },
+  "MALIHUE": {
+    "display_name": "MALIHUE",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "MALLARAUCO": {
+    "display_name": "MALLARAUCO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "MALLOA": {
+    "display_name": "MALLOA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "MALLOCO": {
+    "display_name": "MALLOCO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "MAQUEHUE": {
+    "display_name": "MAQUEHUE",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "MARCHIGUE": {
+    "display_name": "MARCHIGUE",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "MARIA ELENA": {
+    "display_name": "MARIA ELENA",
+    "sucursal": "ANF",
+    "zona": "ZE"
+  },
+  "MARIA PINTO": {
+    "display_name": "MARIA PINTO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "MATANZAS": {
+    "display_name": "MATANZAS",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "MAULE": {
+    "display_name": "MAULE",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "MAULLIN": {
+    "display_name": "MAULLIN",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "MEJILLONES": {
+    "display_name": "MEJILLONES",
+    "sucursal": "ANF",
+    "zona": "ZI"
+  },
+  "MELEFQUEN": {
+    "display_name": "MELEFQUEN",
+    "sucursal": "ZAL",
+    "zona": "ME"
+  },
+  "MELIPEUCO": {
+    "display_name": "MELIPEUCO",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "MELIPILLA": {
+    "display_name": "MELIPILLA",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "METRENCO": {
+    "display_name": "METRENCO",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "MININCO": {
+    "display_name": "MININCO",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "MIRASOL": {
+    "display_name": "MIRASOL",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "MOLINA": {
+    "display_name": "MOLINA",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "MONTE AGUILA": {
+    "display_name": "MONTE AGUILA",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "MONTE PATRIA": {
+    "display_name": "MONTE PATRIA",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "MONTERILLA": {
+    "display_name": "MONTERILLA",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "MORRILLOS": {
+    "display_name": "MORRILLOS",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "MULCHEN": {
+    "display_name": "MULCHEN",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "MULPULMO": {
+    "display_name": "MULPULMO",
+    "sucursal": "ZOS",
+    "zona": "B"
+  },
+  "NACIMIENTO": {
+    "display_name": "NACIMIENTO",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "NANCAGUA": {
+    "display_name": "NANCAGUA",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "NANTOCO": {
+    "display_name": "NANTOCO",
+    "sucursal": "CPO",
+    "zona": "B"
+  },
+  "NAVIDAD": {
+    "display_name": "NAVIDAD",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "NEGRETE": {
+    "display_name": "NEGRETE",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "NIEBLA": {
+    "display_name": "NIEBLA",
+    "sucursal": "ZAL",
+    "zona": "B"
+  },
+  "NINHUE": {
+    "display_name": "NINHUE",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "NIQUEN": {
+    "display_name": "NIQUEN",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "NOGALES": {
+    "display_name": "NOGALES",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "NONTUELA": {
+    "display_name": "NONTUELA",
+    "sucursal": "ZOS",
+    "zona": "ME"
+  },
+  "NUEVA BRAUNAU": {
+    "display_name": "NUEVA BRAUNAU",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "NUEVA IMPERIAL": {
+    "display_name": "NUEVA IMPERIAL",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "NUNOA": {
+    "display_name": "NUNOA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "OLIVAR": {
+    "display_name": "OLIVAR",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "OLIVAR ALTO": {
+    "display_name": "OLIVAR ALTO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "OLIVAR BAJO": {
+    "display_name": "OLIVAR BAJO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "OLMUE": {
+    "display_name": "OLMUE",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "OSORNO": {
+    "display_name": "OSORNO",
+    "sucursal": "ZOS",
+    "zona": "B"
+  },
+  "OVALLE": {
+    "display_name": "OVALLE",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "PADRE HURTADO": {
+    "display_name": "PADRE HURTADO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "PADRE LAS CASAS": {
+    "display_name": "PADRE LAS CASAS",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "PAIHUANO": {
+    "display_name": "PAIHUANO",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "PAILLACO": {
+    "display_name": "PAILLACO",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "PAINE": {
+    "display_name": "PAINE",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "PAIPOTE": {
+    "display_name": "PAIPOTE",
+    "sucursal": "CPO",
+    "zona": "B"
+  },
+  "PALMILLA": {
+    "display_name": "PALMILLA",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "PANGUIPULLI": {
+    "display_name": "PANGUIPULLI",
+    "sucursal": "ZAL",
+    "zona": "ZE"
+  },
+  "PANIAHUE": {
+    "display_name": "PANIAHUE",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "PANIMAVIDA": {
+    "display_name": "PANIMAVIDA",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "PANQUEHUE": {
+    "display_name": "PANQUEHUE",
+    "sucursal": "SCL",
+    "zona": "ME"
+  },
+  "PAPUDO": {
+    "display_name": "PAPUDO",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "PAREDONES": {
+    "display_name": "PAREDONES",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "PARGUA": {
+    "display_name": "PARGUA",
+    "sucursal": "PMC",
+    "zona": "ZI"
+  },
+  "PARRAL": {
+    "display_name": "PARRAL",
+    "sucursal": "ZCA",
+    "zona": "ZE"
+  },
+  "PEDRO AGUIRRE CERDA": {
+    "display_name": "PEDRO AGUIRRE CERDA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "PELARCO": {
+    "display_name": "PELARCO",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "PELEQUEN": {
+    "display_name": "PELEQUEN",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "PELLUHUE": {
+    "display_name": "PELLUHUE",
+    "sucursal": "ZCA",
+    "zona": "ME"
+  },
+  "PEMUCO": {
+    "display_name": "PEMUCO",
+    "sucursal": "YAI",
+    "zona": "ZE"
+  },
+  "PENABLANCA": {
+    "display_name": "PENABLANCA",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "PENAFLOR": {
+    "display_name": "PENAFLOR",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "PENALOLEN": {
+    "display_name": "PENALOLEN",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "PENCAHUE": {
+    "display_name": "PENCAHUE",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "PENCO": {
+    "display_name": "PENCO",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "PENUELAS": {
+    "display_name": "PENUELAS",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "PEOR ES NADA": {
+    "display_name": "PEOR ES NADA",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "PERALILLO": {
+    "display_name": "PERALILLO",
+    "sucursal": "RCG",
+    "zona": "ME"
+  },
+  "PERQUENCO": {
+    "display_name": "PERQUENCO",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "PETORCA": {
+    "display_name": "PETORCA",
+    "sucursal": "ZLC",
+    "zona": "ZE"
+  },
+  "PEUMO": {
+    "display_name": "PEUMO",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "PICA": {
+    "display_name": "PICA",
+    "sucursal": "IQQ",
+    "zona": "ME"
+  },
+  "PICHASCA": {
+    "display_name": "PICHASCA",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "PICHIDANGUI": {
+    "display_name": "PICHIDANGUI",
+    "sucursal": "LVL",
+    "zona": "ZI"
+  },
+  "PICHIDEGUA": {
+    "display_name": "PICHIDEGUA",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "PICHILEMU": {
+    "display_name": "PICHILEMU",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "PICHOY": {
+    "display_name": "PICHOY",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "PILLANLELBUN": {
+    "display_name": "PILLANLELBUN",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "PINTO": {
+    "display_name": "PINTO",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "PIRQUE": {
+    "display_name": "PIRQUE",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "PITRUFQUEN": {
+    "display_name": "PITRUFQUEN",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "PLACILLA DE PENUELAS": {
+    "display_name": "PLACILLA DE PENUELAS",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "PLACILLA SAN FERNANDO": {
+    "display_name": "PLACILLA SAN FERNANDO",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "PLANTA TOTORALILLO": {
+    "display_name": "PLANTA TOTORALILLO",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "PLAYA ANCHA": {
+    "display_name": "PLAYA ANCHA",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "PLAYA BLANCA": {
+    "display_name": "PLAYA BLANCA",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "POAUCHO": {
+    "display_name": "POAUCHO",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "POLPAICO": {
+    "display_name": "POLPAICO",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "POMAIRE": {
+    "display_name": "POMAIRE",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "PORTEZUELO": {
+    "display_name": "PORTEZUELO",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "PORVENIR": {
+    "display_name": "PORVENIR",
+    "sucursal": "PUQ",
+    "zona": "ZE"
+  },
+  "POZO ALMONTE": {
+    "display_name": "POZO ALMONTE",
+    "sucursal": "IQQ",
+    "zona": "ZI"
+  },
+  "PROVIDENCIA": {
+    "display_name": "PROVIDENCIA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "PUCHUNCAVI": {
+    "display_name": "PUCHUNCAVI",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  },
+  "PUCON": {
+    "display_name": "PUCON",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "PUDAHUEL": {
+    "display_name": "PUDAHUEL",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "PUENTE ALTO": {
+    "display_name": "PUENTE ALTO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "PUENTE NEGRO": {
+    "display_name": "PUENTE NEGRO",
+    "sucursal": "CUR",
+    "zona": "ZE"
+  },
+  "PUERTO AYSEN": {
+    "display_name": "PUERTO AYSEN",
+    "sucursal": "GXQ",
+    "zona": "ME"
+  },
+  "PUERTO MONTT": {
+    "display_name": "PUERTO MONTT",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "PUERTO NATALES": {
+    "display_name": "PUERTO NATALES",
+    "sucursal": "PUQ",
+    "zona": "B"
+  },
+  "PUERTO NUEVO": {
+    "display_name": "PUERTO NUEVO",
+    "sucursal": "ZOS",
+    "zona": "ZE"
+  },
+  "PUERTO OCTAY": {
+    "display_name": "PUERTO OCTAY",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "PUERTO SAAVEDRA": {
+    "display_name": "PUERTO SAAVEDRA",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "PUERTO VARAS": {
+    "display_name": "PUERTO VARAS",
+    "sucursal": "PMC",
+    "zona": "B"
+  },
+  "PUERTO WILLIAMS": {
+    "display_name": "PUERTO WILLIAMS",
+    "sucursal": "PUQ",
+    "zona": "ZE"
+  },
+  "PUMANQUE": {
+    "display_name": "PUMANQUE",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "PUNITAQUI": {
+    "display_name": "PUNITAQUI",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "PUNTA ARENAS": {
+    "display_name": "PUNTA ARENAS",
+    "sucursal": "PUQ",
+    "zona": "B"
+  },
+  "PUNTA CORTES": {
+    "display_name": "PUNTA CORTES",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "PUQUELDON": {
+    "display_name": "PUQUELDON",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "PUREN": {
+    "display_name": "PUREN",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "PURRANQUE": {
+    "display_name": "PURRANQUE",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "PUTAENDO": {
+    "display_name": "PUTAENDO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "QUEILEN": {
+    "display_name": "QUEILEN",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "QUELLON": {
+    "display_name": "QUELLON",
+    "sucursal": "PMC",
+    "zona": "ZE"
+  },
+  "QUEMCHI": {
+    "display_name": "QUEMCHI",
+    "sucursal": "PMC",
+    "zona": "ME"
+  },
+  "QUEPE": {
+    "display_name": "QUEPE",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "QUILACAHUIN": {
+    "display_name": "QUILACAHUIN",
+    "sucursal": "ZOS",
+    "zona": "ZE"
+  },
+  "QUILACO": {
+    "display_name": "QUILACO",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "QUILICURA": {
+    "display_name": "QUILICURA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "QUILIMARI": {
+    "display_name": "QUILIMARI",
+    "sucursal": "LVL",
+    "zona": "B"
+  },
+  "QUILLECO": {
+    "display_name": "QUILLECO",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "QUILLON": {
+    "display_name": "QUILLON",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "QUILLOTA": {
+    "display_name": "QUILLOTA",
+    "sucursal": "ZLC",
+    "zona": "B"
+  },
+  "QUILPUE": {
+    "display_name": "QUILPUE",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "QUINCHAMALI": {
+    "display_name": "QUINCHAMALI",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "QUINTA DE TILCOCO": {
+    "display_name": "QUINTA DE TILCOCO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "QUINTA NORMAL": {
+    "display_name": "QUINTA NORMAL",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "QUINTERO": {
+    "display_name": "QUINTERO",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "QUIRIHUE": {
+    "display_name": "QUIRIHUE",
+    "sucursal": "YAI",
+    "zona": "ZE"
+  },
+  "RANCAGUA": {
+    "display_name": "RANCAGUA",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "RANQUIL": {
+    "display_name": "RANQUIL",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "RAPEL": {
+    "display_name": "RAPEL",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "RAUCO": {
+    "display_name": "RAUCO",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "RECOLETA": {
+    "display_name": "RECOLETA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "RENACA": {
+    "display_name": "RENACA",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "RENAICO": {
+    "display_name": "RENAICO",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "RENCA": {
+    "display_name": "RENCA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "RENGO": {
+    "display_name": "RENGO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "REQUEGUA": {
+    "display_name": "REQUEGUA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "REQUINOA": {
+    "display_name": "REQUINOA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "RETIRO": {
+    "display_name": "RETIRO",
+    "sucursal": "ZCA",
+    "zona": "ZE"
+  },
+  "REUMEN": {
+    "display_name": "REUMEN",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "RIACHUELO": {
+    "display_name": "RIACHUELO",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "RINCONADA DE LOS ANDES": {
+    "display_name": "RINCONADA DE LOS ANDES",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "RINCONADA DE MAIPU": {
+    "display_name": "RINCONADA DE MAIPU",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "RININAHUE": {
+    "display_name": "RININAHUE",
+    "sucursal": "ZOS",
+    "zona": "ME"
+  },
+  "RIO BUENO": {
+    "display_name": "RIO BUENO",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "RIO CLARO": {
+    "display_name": "RIO CLARO",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "RIO HURTADO": {
+    "display_name": "RIO HURTADO",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "RIO NEGRO": {
+    "display_name": "RIO NEGRO",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "RODELILLO": {
+    "display_name": "RODELILLO",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "ROMERAL": {
+    "display_name": "ROMERAL",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "ROSARIO": {
+    "display_name": "ROSARIO",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "SAGRADA FAMILIA": {
+    "display_name": "SAGRADA FAMILIA",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "SALAMANCA": {
+    "display_name": "SALAMANCA",
+    "sucursal": "LVL",
+    "zona": "ZE"
+  },
+  "SAMO ALTO": {
+    "display_name": "SAMO ALTO",
+    "sucursal": "LSC",
+    "zona": "ME"
+  },
+  "SAN ANTONIO": {
+    "display_name": "SAN ANTONIO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "SAN BERNARDO": {
+    "display_name": "SAN BERNARDO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "SAN CARLOS": {
+    "display_name": "SAN CARLOS",
+    "sucursal": "YAI",
+    "zona": "B"
+  },
+  "SAN CARLOS PUREN": {
+    "display_name": "SAN CARLOS PUREN",
+    "sucursal": "LSQ",
+    "zona": "B"
+  },
+  "SAN CLEMENTE": {
+    "display_name": "SAN CLEMENTE",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "SAN ESTEBAN": {
+    "display_name": "SAN ESTEBAN",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "SAN FABIAN": {
+    "display_name": "SAN FABIAN",
+    "sucursal": "YAI",
+    "zona": "ZE"
+  },
+  "SAN FELIPE": {
+    "display_name": "SAN FELIPE",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "SAN FELIX": {
+    "display_name": "SAN FELIX",
+    "sucursal": "CPO",
+    "zona": "ME"
+  },
+  "SAN FERNANDO": {
+    "display_name": "SAN FERNANDO",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "SAN FRANCISCO DE MOSTAZAL": {
+    "display_name": "SAN FRANCISCO DE MOSTAZAL",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "SAN GREGORIO": {
+    "display_name": "SAN GREGORIO",
+    "sucursal": "YAI",
+    "zona": "ZE"
+  },
+  "SAN IGNACIO": {
+    "display_name": "SAN IGNACIO",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "SAN JAVIER": {
+    "display_name": "SAN JAVIER",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "SAN JOAQUIN": {
+    "display_name": "SAN JOAQUIN",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "SAN JOSE DE LA MARIQUINA": {
+    "display_name": "SAN JOSE DE LA MARIQUINA",
+    "sucursal": "ZAL",
+    "zona": "ZI"
+  },
+  "SAN JOSE DE MAIPO": {
+    "display_name": "SAN JOSE DE MAIPO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "SAN JUAN DE LA COSTA": {
+    "display_name": "SAN JUAN DE LA COSTA",
+    "sucursal": "ZOS",
+    "zona": "ZE"
+  },
+  "SAN MIGUEL": {
+    "display_name": "SAN MIGUEL",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "SAN MIGUEL DE AZAPA": {
+    "display_name": "SAN MIGUEL DE AZAPA",
+    "sucursal": "ARI",
+    "zona": "B"
+  },
+  "SAN NICOLAS": {
+    "display_name": "SAN NICOLAS",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "SAN PABLO": {
+    "display_name": "SAN PABLO",
+    "sucursal": "ZOS",
+    "zona": "B"
+  },
+  "SAN PEDRO": {
+    "display_name": "SAN PEDRO",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "SAN PEDRO DE ATACAMA": {
+    "display_name": "SAN PEDRO DE ATACAMA",
+    "sucursal": "CJC",
+    "zona": "ZE"
+  },
+  "SAN PEDRO DE LA PAZ": {
+    "display_name": "SAN PEDRO DE LA PAZ",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "SAN PEDRO DE LIMACHE": {
+    "display_name": "SAN PEDRO DE LIMACHE",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "SAN RAFAEL": {
+    "display_name": "SAN RAFAEL",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "SAN RAMON": {
+    "display_name": "SAN RAMON",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "SAN ROBERTO": {
+    "display_name": "SAN ROBERTO",
+    "sucursal": "RCG",
+    "zona": "ZE"
+  },
+  "SAN ROSENDO": {
+    "display_name": "SAN ROSENDO",
+    "sucursal": "LSQ",
+    "zona": "ZE"
+  },
+  "SAN SEBASTIAN": {
+    "display_name": "SAN SEBASTIAN",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "SAN VICENTE DE TAGUA TAGUA": {
+    "display_name": "SAN VICENTE DE TAGUA TAGUA",
+    "sucursal": "RCG",
+    "zona": "ZI"
+  },
+  "SAN VICENTE DE TALCAHUANO": {
+    "display_name": "SAN VICENTE DE TALCAHUANO",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "SANTA ANA DE CHENA": {
+    "display_name": "SANTA ANA DE CHENA",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "SANTA BARBARA": {
+    "display_name": "SANTA BARBARA",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "SANTA CLARA": {
+    "display_name": "SANTA CLARA",
+    "sucursal": "YAI",
+    "zona": "ZI"
+  },
+  "SANTA CRUZ": {
+    "display_name": "SANTA CRUZ",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "SANTA FE": {
+    "display_name": "SANTA FE",
+    "sucursal": "LSQ",
+    "zona": "B"
+  },
+  "SANTA FILOMENA": {
+    "display_name": "SANTA FILOMENA",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "SANTA JUANA": {
+    "display_name": "SANTA JUANA",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "SANTA MARIA": {
+    "display_name": "SANTA MARIA",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "SANTIAGO": {
+    "display_name": "SANTIAGO",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "SANTO DOMINGO": {
+    "display_name": "SANTO DOMINGO",
+    "sucursal": "VAP",
+    "zona": "ZE"
+  },
+  "SARMIENTO": {
+    "display_name": "SARMIENTO",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "SOTAQUI": {
+    "display_name": "SOTAQUI",
+    "sucursal": "LSC",
+    "zona": "ZE"
+  },
+  "TABOLANGO": {
+    "display_name": "TABOLANGO",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "TALAGANTE": {
+    "display_name": "TALAGANTE",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "TALCA": {
+    "display_name": "TALCA",
+    "sucursal": "ZCA",
+    "zona": "B"
+  },
+  "TALCAHUANO": {
+    "display_name": "TALCAHUANO",
+    "sucursal": "CCP",
+    "zona": "B"
+  },
+  "TALTAL": {
+    "display_name": "TALTAL",
+    "sucursal": "CPO",
+    "zona": "ZE"
+  },
+  "TEMUCO": {
+    "display_name": "TEMUCO",
+    "sucursal": "ZCO",
+    "zona": "B"
+  },
+  "TENO": {
+    "display_name": "TENO",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "TEODORO SCHMIDT": {
+    "display_name": "TEODORO SCHMIDT",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "TIERRA AMARILLA": {
+    "display_name": "TIERRA AMARILLA",
+    "sucursal": "CPO",
+    "zona": "ZI"
+  },
+  "TIERRAS BLANCAS": {
+    "display_name": "TIERRAS BLANCAS",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "TILTIL": {
+    "display_name": "TILTIL",
+    "sucursal": "SCL",
+    "zona": "ZI"
+  },
+  "TIRUA": {
+    "display_name": "TIRUA",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "TOCOPILLA": {
+    "display_name": "TOCOPILLA",
+    "sucursal": "ANF",
+    "zona": "ZE"
+  },
+  "TOLTEN": {
+    "display_name": "TOLTEN",
+    "sucursal": "ZCO",
+    "zona": "ME"
+  },
+  "TOME": {
+    "display_name": "TOME",
+    "sucursal": "CCP",
+    "zona": "ZI"
+  },
+  "TONGOY": {
+    "display_name": "TONGOY",
+    "sucursal": "LSC",
+    "zona": "ZI"
+  },
+  "TOTORALILLO": {
+    "display_name": "TOTORALILLO",
+    "sucursal": "LSC",
+    "zona": "B"
+  },
+  "TRAIGUEN": {
+    "display_name": "TRAIGUEN",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "TREGUACO": {
+    "display_name": "TREGUACO",
+    "sucursal": "YAI",
+    "zona": "ZE"
+  },
+  "TRICAUCO": {
+    "display_name": "TRICAUCO",
+    "sucursal": "CCP",
+    "zona": "ZE"
+  },
+  "TRUMAO": {
+    "display_name": "TRUMAO",
+    "sucursal": "ZOS",
+    "zona": "ZI"
+  },
+  "TUBUL": {
+    "display_name": "TUBUL",
+    "sucursal": "CCP",
+    "zona": "ME"
+  },
+  "TUCAPEL": {
+    "display_name": "TUCAPEL",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "TUNICHE": {
+    "display_name": "TUNICHE",
+    "sucursal": "RCG",
+    "zona": "B"
+  },
+  "TUTUNQUEN": {
+    "display_name": "TUTUNQUEN",
+    "sucursal": "CUR",
+    "zona": "B"
+  },
+  "VALDIVIA": {
+    "display_name": "VALDIVIA",
+    "sucursal": "ZAL",
+    "zona": "B"
+  },
+  "VALDIVIA DE PAINE": {
+    "display_name": "VALDIVIA DE PAINE",
+    "sucursal": "SCL",
+    "zona": "ZE"
+  },
+  "VALLENAR": {
+    "display_name": "VALLENAR",
+    "sucursal": "CPO",
+    "zona": "ZI"
+  },
+  "VALPARAISO": {
+    "display_name": "VALPARAISO",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "VICHUQUEN": {
+    "display_name": "VICHUQUEN",
+    "sucursal": "CUR",
+    "zona": "ME"
+  },
+  "VICTORIA": {
+    "display_name": "VICTORIA",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "VICUNA": {
+    "display_name": "VICUNA",
+    "sucursal": "LSC",
+    "zona": "ZE"
+  },
+  "VILCUN": {
+    "display_name": "VILCUN",
+    "sucursal": "ZCO",
+    "zona": "ZI"
+  },
+  "VILLA ALEGRE": {
+    "display_name": "VILLA ALEGRE",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "VILLA ALEMANA": {
+    "display_name": "VILLA ALEMANA",
+    "sucursal": "VAP",
+    "zona": "ZI"
+  },
+  "VILLA PRAT": {
+    "display_name": "VILLA PRAT",
+    "sucursal": "CUR",
+    "zona": "ZI"
+  },
+  "VILLARRICA": {
+    "display_name": "VILLARRICA",
+    "sucursal": "ZCO",
+    "zona": "ZE"
+  },
+  "VINA DEL MAR": {
+    "display_name": "VINA DEL MAR",
+    "sucursal": "VAP",
+    "zona": "B"
+  },
+  "VITACURA": {
+    "display_name": "VITACURA",
+    "sucursal": "SCL",
+    "zona": "B"
+  },
+  "YERBAS BUENAS": {
+    "display_name": "YERBAS BUENAS",
+    "sucursal": "ZCA",
+    "zona": "ZI"
+  },
+  "YUMBEL": {
+    "display_name": "YUMBEL",
+    "sucursal": "LSQ",
+    "zona": "ZI"
+  },
+  "YUNGAY": {
+    "display_name": "YUNGAY",
+    "sucursal": "YAI",
+    "zona": "ME"
+  },
+  "ZAPALLAR": {
+    "display_name": "ZAPALLAR",
+    "sucursal": "ZLC",
+    "zona": "ZI"
+  }
+}

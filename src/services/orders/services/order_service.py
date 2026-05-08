@@ -493,6 +493,73 @@ def apply_order_updates(
     return out
 
 
+def send_order_invoice(
+    user: dict[str, Any],
+    order_id: str,
+    *,
+    email: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Envía la factura/invoice del pedido al cliente vía ``orderInvoiceSend``.
+
+    Restricciones:
+      - Solo roles de intervención (``SUPERADMIN`` / ``ADMIN`` / ``SALES``).
+      - Solo pedidos ``PENDING`` (un pedido ``CLOSED`` ya está pagado).
+      - Tienda con instalación OAuth válida y scope ``write_orders``.
+    """
+    from services.shopify_order_graphql import (  # noqa: WPS433
+        send_order_invoice_via_shopify,
+    )
+    from utils.cognito_order_access import (  # noqa: WPS433
+        can_write_intervention,
+        get_order_by_id,
+    )
+
+    uid = uuid.UUID(user["id"])
+    shop_domain: str
+    shopify_oid: str
+
+    with get_session() as session:
+        row: ShopifyOrder | None = get_order_by_id(session, order_id)
+        if not row:
+            raise LookupError("Pedido no encontrado")
+        if not can_write_intervention(user, row):
+            raise PermissionError(
+                "Sin permiso para enviar la factura o el pedido no está pendiente"
+            )
+        shop_domain = row.shop_domain
+        shopify_oid = row.shopify_order_id
+
+    with get_session() as session:
+        inst = session.scalar(
+            select(ShopifyAppInstallation).where(
+                ShopifyAppInstallation.shop_domain == shop_domain
+            )
+        )
+        token = (inst.shopify_access_token if inst else None) or ""
+    if not str(token).strip():
+        raise ValueError(
+            "La tienda no tiene token OAuth; conecta Shopify en el admin"
+        )
+
+    send_order_invoice_via_shopify(
+        shop_domain,
+        str(token).strip(),
+        shopify_oid,
+        email=email,
+    )
+
+    with get_session() as session:
+        row3 = get_order_by_id(session, order_id)
+        if row3:
+            row3.last_intervened_by_user_id = uid
+            session.commit()
+
+    out = get_order_for_user(user, order_id)
+    if not out:
+        raise LookupError("Pedido no encontrado")
+    return out
+
+
 def get_line_item_featured_images_for_order(
     user: dict[str, Any], order_id: str
 ) -> dict[str, str | None] | None:

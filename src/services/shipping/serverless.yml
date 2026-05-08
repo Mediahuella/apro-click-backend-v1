@@ -1,0 +1,94 @@
+service: apro-click-admin-shipping
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: shipping
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    COGNITO_USER_POOL_ID:
+      Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-id
+    SHIPPING_ORIGIN_SUCURSAL: ${env:SHIPPING_ORIGIN_SUCURSAL, 'SCL'}
+    SHIPPING_IVA_PCT: ${env:SHIPPING_IVA_PCT, '19'}
+    SHIPPING_SERVICE_NAME: ${env:SHIPPING_SERVICE_NAME, 'Apro Click — Carga consolidada'}
+    SHIPPING_SERVICE_CODE: ${env:SHIPPING_SERVICE_CODE, 'aproclick_consolidada'}
+    # Lado en cm del cubo asumido por unidad cuando Shopify no manda
+    # dimensiones por línea. Ajustar (o leer metafield por variante) cuando
+    # tengamos data real.
+    SHIPPING_DEFAULT_PKG_CM: ${env:SHIPPING_DEFAULT_PKG_CM, '10'}
+    # CSV de shop domains permitidos para el callback de Shopify CarrierService.
+    # Vacío = sin filtro (útil para staging). Recomendado en prod: <shop>.myshopify.com
+    SHIPPING_ALLOWED_SHOP_DOMAINS: ${env:SHIPPING_ALLOWED_SHOP_DOMAINS, ''}
+    # Versión Admin API usada por el handler administrativo (carrierServiceCreate/Update/Delete/List).
+    SHIPPING_SHOPIFY_API_VERSION: ${env:SHIPPING_SHOPIFY_API_VERSION, '2026-04'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+            - cognito-idp:AdminListGroupsForUser
+          Resource:
+            - Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  quote:
+    handler: handlers/quote.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/shipping/quote
+          method: post
+      - httpApi:
+          path: /api/v1/shipping/localidades
+          method: get
+
+  shopifyCarrierService:
+    handler: handlers/shopify_carrier_service.lambda_handler
+    timeout: 9 # Shopify timeout = 10s; dejamos 1s de margen.
+    events:
+      - httpApi:
+          path: /api/v1/shipping/shopify/carrier-service
+          method: post
+
+  shopifyRegister:
+    handler: handlers/shopify_register.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/shipping/shopify/registration
+          method: get
+      - httpApi:
+          path: /api/v1/shipping/shopify/registration
+          method: post
+      - httpApi:
+          path: /api/v1/shipping/shopify/registration/{carrier_id}
+          method: patch
+      - httpApi:
+          path: /api/v1/shipping/shopify/registration/{carrier_id}
+          method: delete

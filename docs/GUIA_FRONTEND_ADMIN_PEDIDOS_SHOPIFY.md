@@ -197,6 +197,34 @@ En un solo `PATCH` podés mandar `intervention_notes` y campos `shopify_*`. Las 
 
 Tras cualquier escritura exitosa se actualiza `last_intervened_by_user_id`.
 
+### 3.6 Enviar factura/invoice de pago al cliente
+
+```
+POST /api/v1/orders/{order_id}/send-invoice
+Content-Type: application/json
+```
+
+Cuerpo opcional (todos los campos son opcionales; por defecto Shopify usa el email del pedido y la plantilla por defecto):
+
+```json
+{
+  "email": {
+    "to": "cliente@empresa.com",
+    "from": "ventas@miapp.com",
+    "subject": "Tu factura #1001",
+    "customMessage": "Gracias por tu compra",
+    "bcc": ["copias@miapp.com"],
+    "replyTo": "ventas@miapp.com"
+  }
+}
+```
+
+- Roles: `SUPERADMIN`, `ADMIN`, `SALES` (no `KPI_VISUALIZERS`).
+- Solo si `internal_status === "PENDING"`.
+- Internamente dispara la mutación Admin GraphQL `orderInvoiceSend`. Requiere scope `write_orders` en la instalación OAuth (reinstalar la app si recién se agrega).
+- Respuesta: el pedido CRM con `last_intervened_by_user_id` actualizado (mismo shape que el detalle).
+- Errores típicos: `403` si el rol o estado no aplica; `400` si Shopify rechaza el envío (sin email del cliente, scope ausente, etc.).
+
 ---
 
 ## 4. Modelo de pedido (`data`)

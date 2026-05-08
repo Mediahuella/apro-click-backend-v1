@@ -105,6 +105,7 @@ company_registration_requests
 | `company_id` | UUID FK → `companies`, **NULL** permitido (vendedor sin compañía cliente). |
 | `shopify_staff_member_id` | `TEXT` NULL: GID GraphQL `gid://shopify/StaffMember/...` si se vinculó con la tienda. |
 | `shopify_staff_link_status` | `TEXT` NULL: resultado del último intento (p. ej. LINKED, NOT_FOUND, SKIPPED_ROLE). |
+| `codigo_sap` | `VARCHAR` NULL para roles distintos de `SALES`. Con rol SALES la API exige valor no vacío en alta y al pasar el usuario a SALES o al editar ese campo. |
 | `created_at`, `updated_at` | `timestamptz`. |
 
 ### 3.3 `clients`

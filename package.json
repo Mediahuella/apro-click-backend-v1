@@ -13,7 +13,11 @@
     "db:rollback": "PYTHONPATH=src/shared alembic downgrade -1",
     "db:generate": "PYTHONPATH=src/shared alembic revision --autogenerate -m",
     "db:current": "PYTHONPATH=src/shared alembic current",
-    "db:history": "PYTHONPATH=src/shared alembic history"
+    "db:history": "PYTHONPATH=src/shared alembic history",
+    "shipping:build-data": "python3 scripts/build_shipping_data.py",
+    "sync:stock": "python3 scripts/sync_stock_bulk.py --only-positive",
+    "sync:stock:all": "python3 scripts/sync_stock_bulk.py",
+    "sync:stock:dry": "python3 scripts/sync_stock_bulk.py --dry-run --only-positive"
   },
   "keywords": [],
   "author": "",

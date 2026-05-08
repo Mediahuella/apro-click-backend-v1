@@ -1,0 +1,5 @@
+# Dependencias propias del servicio (Powertools va en layer; ver serverless.pythonRequirements.yml)
+# Solo el handler de registro (handlers/shopify_register.py) usa DB; los handlers
+# de quote/callback no importan SQLAlchemy y no pagan ese cold start.
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9

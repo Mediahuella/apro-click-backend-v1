@@ -1,0 +1,5 @@
+# Dependencias propias del servicio (Powertools va en layer; ver serverless.pythonRequirements.yml)
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9
+# Parser de Excel para el upload del admin (handlers/price_lists.py).
+openpyxl>=3.1

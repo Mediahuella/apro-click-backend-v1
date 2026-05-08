@@ -38,8 +38,10 @@ from services.order_service import (  # noqa: E402
     get_line_item_featured_images_for_order,
     get_order_for_user,
     list_orders_for_user,
+    send_order_invoice,
 )
 from utils.cognito_order_access import (  # noqa: E402
+    INTERVENTION_ROLES,
     READ_ROLES,
     get_user_by_cognito_access_token,
     parse_bearer_authorization,
@@ -156,6 +158,51 @@ def patch_order(order_id: str):
     except Exception:
         logger.exception("Error en intervención")
         raise InternalServerError("Error en intervención")
+
+
+@app.post("/api/v1/orders/<order_id>/send-invoice")
+@tracer.capture_method
+def send_invoice(order_id: str):
+    """Dispara ``orderInvoiceSend`` en Shopify para el pedido dado.
+
+    - Roles: ``SUPERADMIN`` / ``ADMIN`` / ``SALES`` (no ``KPI_VISUALIZERS``).
+    - Solo si ``internal_status === 'PENDING'``.
+    - Cuerpo opcional ``{ email: { to, from, subject, customMessage, bcc, replyTo } }``
+      (todos los campos opcionales). Sin cuerpo, Shopify usa el email del pedido y
+      la plantilla por defecto.
+    """
+    try:
+        user = _require_reader()
+        if user.get("role") not in INTERVENTION_ROLES:
+            raise ForbiddenError("Sin permiso para enviar la factura del pedido")
+        body = app.current_event.json_body
+        email_payload: dict | None = None
+        if isinstance(body, dict):
+            raw_email = body.get("email")
+            if isinstance(raw_email, dict):
+                email_payload = {
+                    k: v
+                    for k, v in raw_email.items()
+                    if k in ("to", "from", "subject", "customMessage", "bcc", "replyTo")
+                    and v not in (None, "")
+                }
+                if not email_payload:
+                    email_payload = None
+        data = send_order_invoice(user, order_id, email=email_payload)
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except LookupError as e:
+        raise NotFoundError(str(e))
+    except PermissionError as e:
+        raise ForbiddenError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except UnauthorizedError:
+        raise
+    except ForbiddenError:
+        raise
+    except Exception:
+        logger.exception("Error enviando invoice del pedido")
+        raise InternalServerError("Error enviando invoice del pedido")
 
 
 def lambda_handler(event: dict, context: LambdaContext):

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from utils.chile_shopify_zone import normalize_chile_shopify_zone_code
+
 
 def _strip_str(v: Any) -> str | None:
     if v is None:
@@ -127,8 +129,10 @@ def shipping_for_shopify_b2b(
 ) -> dict[str, Any]:
     """Construye el dict interno para `CompanyLocationInput` o lanza `ValueError` claro.
 
-    `shipping_zone_code` en Shopify es el código de **región o estado** (p. ej. Chile: RM, VIII;
-    EE. UU.: CA). Es opcional si la tienda no lo requiere.
+    Para **Chile** (`shipping_country_code` ``CL``), si hay región se normaliza a ISO 3166-2:CL
+    (p. ej. ``RM`` / ``VIII`` / ``Región Metropolitana`` → ``CL-RM`` / ``CL-BI``) antes de enviar
+    ``zoneCode`` a Shopify. Otros países: se envía el valor tal cual (mayúsculas en país).
+    ``shipping_zone_code`` es opcional si la tienda no lo requiere.
     """
     merged = canonical_shipping_payload(payload)
 
@@ -144,15 +148,11 @@ def shipping_for_shopify_b2b(
         )
     if not city:
         missing_labels.append("ciudad o comuna (shipping_city o shipping_address.city)")
-    if not zip_code:
-        missing_labels.append(
-            "código postal (shipping_zip o shipping_address.postal_code)"
-        )
 
     if missing_labels:
         zone_help = (
-            "shipping_zone_code es opcional: código de región o estado para Shopify "
-            "(Chile: ej. RM, VIII; no es la comuna)."
+            "shipping_zone_code es opcional: para Chile se aceptan nombres o romanos y se traducen "
+            "a ISO (ej. CL-RM, CL-VS); no uses la comuna como región."
         )
         raise ValueError(
             "No se puede aprobar: faltan datos de dirección para crear la empresa B2B en Shopify. "
@@ -165,15 +165,16 @@ def shipping_for_shopify_b2b(
     out: dict[str, Any] = {
         "address1": a1,
         "city": city,
-        "zip": zip_code,
         "country_code": country,
     }
+    if zip_code:
+        out["zip"] = zip_code
     a2 = (merged.get("shipping_address2") or "").strip()
     if a2:
         out["address2"] = a2
     zc = (merged.get("shipping_zone_code") or "").strip()
     if zc:
-        out["zone_code"] = zc
+        out["zone_code"] = normalize_chile_shopify_zone_code(zc) if country == "CL" else zc
     sf = (merged.get("shipping_first_name") or "").strip()
     sl = (merged.get("shipping_last_name") or "").strip()
     out["first_name"] = sf or first_name

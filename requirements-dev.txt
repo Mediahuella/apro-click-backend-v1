@@ -2,3 +2,5 @@
 sqlalchemy>=2.0,<3.0
 psycopg2-binary>=2.9
 alembic>=1.13
+# Pre-procesamiento del Excel del cotizador (scripts/build_shipping_data.py)
+openpyxl>=3.1

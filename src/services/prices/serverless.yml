@@ -1,0 +1,211 @@
+service: apro-click-admin-prices
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: prices
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+  # Bucket de los Excel subidos (un objeto por upload). El bucket se crea en este
+  # mismo stack; el nombre se referencia desde la Lambda con ${self:custom.uploadsBucket}.
+  uploadsBucketName: apro-click-${self:provider.stage}-prices-uploads
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    COGNITO_USER_POOL_ID:
+      Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-id
+    # Versión Admin GraphQL — alineada con el resto de servicios.
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    # Tienda principal (opcional). Si no se setea, el worker lee la única
+    # ShopifyAppInstallation activa de la BD.
+    SHOPIFY_SHOP: ${env:SHOPIFY_SHOP, ''}
+    # Moneda fija de los catálogos B2B Chile.
+    PRICES_B2B_CURRENCY: ${env:PRICES_B2B_CURRENCY, 'CLP'}
+    # CSV opcional de gid://shopify/CompanyLocation/... para asociar al Catalog
+    # del segmento la primera vez que se crea. Si quedan vacíos, se crea sólo
+    # el PriceList (Shopify exige companyLocationIds en el catalog; sin esto
+    # el worker NO crea el Catalog).
+    PRICES_B2B_PYME_LOCATION_IDS: ${env:PRICES_B2B_PYME_LOCATION_IDS, ''}
+    PRICES_B2B_MEDIANA_LOCATION_IDS: ${env:PRICES_B2B_MEDIANA_LOCATION_IDS, ''}
+    PRICES_B2B_GRAN_EMPRESA_LOCATION_IDS: ${env:PRICES_B2B_GRAN_EMPRESA_LOCATION_IDS, ''}
+    PRICES_UPLOADS_BUCKET: ${self:custom.uploadsBucketName}
+    PRICES_UPLOADS_QUEUE_URL: !Ref PriceUploadsQueue
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+            - cognito-idp:AdminListGroupsForUser
+          Resource:
+            - Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource:
+            - !Sub arn:aws:s3:::${self:custom.uploadsBucketName}/*
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            - !GetAtt PriceUploadsQueue.Arn
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+          Resource:
+            - !GetAtt PriceUploadsQueue.Arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  uploadPriceList:
+    handler: handlers/uploads.lambda_handler
+    # El handler sólo guarda el Excel en S3 + crea fila + encola SQS;
+    # el cuerpo HTTP puede ser ~5MB en base64 → 1024 MB para el decode.
+    memorySize: 1024
+    timeout: 28
+    events:
+      - httpApi:
+          path: /api/v1/prices/uploads
+          method: post
+
+  listPriceUploads:
+    handler: handlers/uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/uploads
+          method: get
+
+  getPriceUpload:
+    handler: handlers/uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/uploads/{upload_id}
+          method: get
+
+  refreshPriceUploadStatus:
+    handler: handlers/uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/uploads/{upload_id}/refresh
+          method: post
+
+  getPriceSegments:
+    handler: handlers/uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/segments
+          method: get
+
+  rebuildSegmentCatalog:
+    handler: handlers/uploads.lambda_handler
+    # Hace ~5 calls a Shopify (priceList, companies, catalogCreate);
+    # 60s es holgado.
+    timeout: 60
+    memorySize: 512
+    events:
+      - httpApi:
+          path: /api/v1/prices/segments/{segment}/rebuild-catalog
+          method: post
+
+  priceUploadWorker:
+    handler: handlers/upload_worker.lambda_handler
+    # El worker hace: parse Excel + lookup ~12k SKU + 3 bulk mutations.
+    # 5 min con memoria alta es holgado para evitar throttling de Shopify.
+    timeout: 300
+    memorySize: 2048
+    events:
+      - sqs:
+          arn: !GetAtt PriceUploadsQueue.Arn
+          batchSize: 1
+          functionResponseType: ReportBatchItemFailures
+
+resources:
+  Resources:
+    # -----------------------------------------------------------------
+    # S3 — bucket privado donde se guardan los Excel subidos por el admin.
+    # -----------------------------------------------------------------
+    PriceUploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.uploadsBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        VersioningConfiguration:
+          Status: Enabled
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        LifecycleConfiguration:
+          Rules:
+            # Los Excel sólo nos importan para auditoría / reproceso. A los
+            # 180 días se borran solos.
+            - Id: ExpireOldUploads
+              Status: Enabled
+              ExpirationInDays: 180
+              NoncurrentVersionExpirationInDays: 30
+
+    # -----------------------------------------------------------------
+    # SQS — cola de jobs del worker (un mensaje por upload).
+    # -----------------------------------------------------------------
+    PriceUploadsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-price-uploads
+        # Igual al timeout del worker + margen.
+        VisibilityTimeout: 360
+        MessageRetentionPeriod: 345600 # 4 días
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt PriceUploadsDLQ.Arn
+          maxReceiveCount: 3
+
+    PriceUploadsDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-price-uploads-dlq
+        MessageRetentionPeriod: 1209600 # 14 días
+
+  Outputs:
+    PriceUploadsBucketName:
+      Value: !Ref PriceUploadsBucket
+      Export:
+        Name: apro-click-${self:provider.stage}-prices-uploads-bucket
+    PriceUploadsQueueUrl:
+      Value: !Ref PriceUploadsQueue
+      Export:
+        Name: apro-click-${self:provider.stage}-prices-uploads-queue-url
+    PriceUploadsQueueArn:
+      Value: !GetAtt PriceUploadsQueue.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-prices-uploads-queue-arn

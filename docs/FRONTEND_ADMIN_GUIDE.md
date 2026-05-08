@@ -504,10 +504,10 @@ export function getNavForUser(user: DecodedUser | null): NavItem[] {
 
 | Método | Ruta | Body / Query | Respuesta |
 |--------|------|-------------|-----------|
-| POST | `/api/v1/users` | `{ email, given_name?, family_name?, role?, temporary_password? }` | `201 { data: User }` |
+| POST | `/api/v1/users` | `{ email, given_name?, family_name?, role?, codigo_sap?, temporary_password?, company_ids? }` — **`codigo_sap` obligatorio si `role` es `SALES`** (default del body es `SALES`) | `201 { data: User }` |
 | GET | `/api/v1/users` | `?limit=50&offset=0` | `{ data: { users: User[] } }` |
 | GET | `/api/v1/users/{user_id}` | — | `{ data: User & { cognito_groups } }` |
-| PUT | `/api/v1/users/{user_id}` | `{ given_name?, family_name?, role?, status? }` | `{ data: User }` |
+| PUT | `/api/v1/users/{user_id}` | `{ given_name?, family_name?, role?, status?, codigo_sap?, company_ids? }` — al pasar `role` a `SALES`, enviar **`codigo_sap`** no vacío; al quitar `SALES`, el código se borra | `{ data: User }` |
 | POST | `/api/v1/users/{user_id}/link-shopify-staff` | — | `{ data: { shopify_staff_member_id?, shopify_staff_link_status, shopify_staff_link_message?, ... } }` (vínculo con Staff de Shopify buscando por el mismo **email** del usuario) |
 | POST | `/api/v1/users/{user_id}/associate-shopify-staff` | `{ shopify_staff_member_gid, skip_email_verification? }` | `200` — asocia un Staff **ya creado** en Shopify por GID `gid://shopify/StaffMember/...` |
 | DELETE | `/api/v1/users/{user_id}` | — | `{ message: "User deleted" }` |
@@ -515,6 +515,8 @@ export function getNavForUser(user: DecodedUser | null): NavItem[] {
 **`user_id` en el path** = `users.id` (UUID) **o** `cognito_sub` (el backend acepta ambos).
 
 **Guía detallada (Shopify staff en el admin, UX, tipos):** [GUIA_FRONTEND_ADMIN_SHOPIFY_STAFF.md](./GUIA_FRONTEND_ADMIN_SHOPIFY_STAFF.md).
+
+**Código SAP (ventas SALES):** campo `codigo_sap` obligatorio para rol `SALES` en alta y al promover a SALES — ver [GUIA_FRONTEND_CODIGO_SAP_USERS.md](./GUIA_FRONTEND_CODIGO_SAP_USERS.md).
 
 **Tipo User (frontend):**
 
@@ -533,6 +535,7 @@ export interface User {
   role: UserRole;
   status: UserStatus;
   company_id: string | null;
+  codigo_sap: string | null;
   created_at: string;   // ISO 8601
   updated_at: string;
 }
@@ -546,6 +549,7 @@ export interface CreateUserRequest {
   given_name?: string;
   family_name?: string;
   role?: UserRole;
+  codigo_sap?: string;
   temporary_password?: string;
 }
 
@@ -554,6 +558,7 @@ export interface UpdateUserRequest {
   family_name?: string;
   role?: UserRole;
   status?: UserStatus;
+  codigo_sap?: string;
 }
 ```
 

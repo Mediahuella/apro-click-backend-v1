@@ -27,7 +27,26 @@ provider:
     REGION: ${self:provider.region}
     DATABASE_URL: ${env:DATABASE_URL, ''}
     SHOPIFY_CLIENT_SECRET: ${env:SHOPIFY_CLIENT_SECRET, ''}
-    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2024-10'}
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    SHOPIFY_STOCK_NAMESPACE: ${env:SHOPIFY_STOCK_NAMESPACE, 'aproclick'}
+    SHOPIFY_STOCK_KEY: ${env:SHOPIFY_STOCK_KEY, 'stock'}
+    INVENTORY_SYNC_QUEUE_URL: !Ref InventorySyncQueue
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            - !GetAtt InventorySyncQueue.Arn
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+          Resource:
+            - !GetAtt InventorySyncQueue.Arn
 
 functions:
   health:
@@ -48,6 +67,9 @@ functions:
           path: /api/v1/orders/{order_id}/line-images
           method: get
       - httpApi:
+          path: /api/v1/orders/{order_id}/send-invoice
+          method: post
+      - httpApi:
           path: /api/v1/orders/{order_id}
           method: get
       - httpApi:
@@ -60,3 +82,66 @@ functions:
       - httpApi:
           path: /api/v1/orders/shopify/webhook
           method: post
+
+  shopifyInventoryWebhook:
+    handler: handlers/shopify_inventory_webhook.lambda_handler
+    timeout: 6
+    events:
+      - httpApi:
+          path: /api/v1/inventory/shopify/webhook
+          method: post
+
+  inventorySyncWorker:
+    handler: handlers/inventory_sync_worker.lambda_handler
+    timeout: 28
+    events:
+      # NB: MaximumBatchingWindow no está soportado en Event Source Mappings
+      # de colas FIFO (Lambda devuelve InvalidRequest 400).
+      - sqs:
+          arn: !GetAtt InventorySyncQueue.Arn
+          batchSize: 10
+          functionResponseType: ReportBatchItemFailures
+
+resources:
+  Resources:
+    # -----------------------------------------------------------------
+    # SQS FIFO — coalescing por inventory_item_id (MessageGroupId) y
+    # dedup window de 5 min con MessageDeduplicationId = X-Shopify-Webhook-Id.
+    # -----------------------------------------------------------------
+    InventorySyncQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-inventory-stock-sync.fifo
+        FifoQueue: true
+        ContentBasedDeduplication: false
+        DeduplicationScope: messageGroup
+        FifoThroughputLimit: perMessageGroupId
+        VisibilityTimeout: 90
+        MessageRetentionPeriod: 345600 # 4 días
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt InventorySyncDLQ.Arn
+          maxReceiveCount: 5
+
+    InventorySyncDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-inventory-stock-sync-dlq.fifo
+        FifoQueue: true
+        ContentBasedDeduplication: false
+        MessageRetentionPeriod: 1209600 # 14 días
+
+  Outputs:
+    InventorySyncQueueUrl:
+      Value: !Ref InventorySyncQueue
+      Export:
+        Name: apro-click-${self:provider.stage}-inventory-sync-queue-url
+
+    InventorySyncQueueArn:
+      Value: !GetAtt InventorySyncQueue.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-inventory-sync-queue-arn
+
+    InventorySyncDLQUrl:
+      Value: !Ref InventorySyncDLQ
+      Export:
+        Name: apro-click-${self:provider.stage}-inventory-sync-dlq-url

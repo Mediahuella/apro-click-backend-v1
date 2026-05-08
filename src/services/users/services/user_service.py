@@ -149,6 +149,13 @@ def _sub_from_cognito_get_user(fetched: dict[str, Any]) -> str:
     return _sub_from_cognito_attribute_list(fetched.get("UserAttributes", []))
 
 
+def _normalize_codigo_sap(raw: object | None) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s if s else None
+
+
 def _resolve_user(session: Session, user_id: str) -> User | None:
     """Resolve by PostgreSQL `users.id` (UUID) or by `cognito_sub` (Cognito)."""
     try:
@@ -228,10 +235,20 @@ class UserService:
         role: str = "SALES",
         temporary_password: str | None = None,
         company_ids: list[str] | None = None,
+        codigo_sap: str | None = None,
     ) -> dict[str, Any]:
         role = coerce_role(role)
         if role not in VALID_ROLES:
             raise ValueError(f"Invalid role '{role}'. Valid: {sorted(VALID_ROLES)}")
+        sap_n = _normalize_codigo_sap(codigo_sap)
+        if role == "SALES":
+            if not sap_n:
+                raise ValueError(
+                    "codigo_sap es obligatorio cuando el rol es SALES "
+                    "(valor de texto no vacío)"
+                )
+        else:
+            sap_n = None
 
         with get_session() as session:
             existing = session.execute(
@@ -271,6 +288,7 @@ class UserService:
                     role=role,
                     status="PENDING",
                     company_id=platform_company_id,
+                    codigo_sap=sap_n,
                 )
                 session.add(user)
                 session.flush()
@@ -333,6 +351,7 @@ class UserService:
             user = _resolve_user(session, user_id)
             if not user:
                 raise ValueError(f"User '{user_id}' not found")
+            prior_role = user.role
 
             cognito_attr_updates: dict[str, str] = {}
             if updates.get("given_name"):
@@ -374,6 +393,22 @@ class UserService:
             present, cids = company_ids_in_update(updates)
             if present:
                 _replace_user_order_companies(session, user.id, cids)
+
+            if "codigo_sap" in updates:
+                user.codigo_sap = _normalize_codigo_sap(updates.get("codigo_sap"))
+
+            transitioned_to_sales = prior_role != "SALES" and user.role == "SALES"
+            if user.role != "SALES":
+                user.codigo_sap = None
+            elif transitioned_to_sales and not user.codigo_sap:
+                raise ValueError(
+                    "codigo_sap es obligatorio al asignar el rol SALES "
+                    "(incluya 'codigo_sap' en el cuerpo con un valor no vacío)"
+                )
+            elif "codigo_sap" in updates and not user.codigo_sap:
+                raise ValueError(
+                    "codigo_sap no puede estar vacío para usuarios con rol SALES"
+                )
 
             session.commit()
             session.refresh(user)

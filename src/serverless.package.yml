@@ -10,6 +10,8 @@ package:
     - 'services/**/*.py'
     - 'utils/**/*.py'
     - 'shared/**/*.py'
+    # Servicios con data estática (ej. shipping/data/*.json). No-op si no existe.
+    - 'data/**/*.json'
     # Excluir explícitamente archivos problemáticos
     - '!**/.requirements.zip'
     - '!**/*.zip'
