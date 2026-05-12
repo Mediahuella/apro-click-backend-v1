@@ -33,6 +33,7 @@ from database.models.company import Company  # noqa: E402
 from database.models.registration_request import (  # noqa: E402
     CompanyRegistrationRequest,
 )
+from database.models.user_company import UserCompany  # noqa: E402
 from utils.rut import format_rut_stored  # noqa: E402
 from utils.shipping_payload import (  # noqa: E402
     canonical_shipping_payload,
@@ -227,11 +228,19 @@ class RegistrationRequestService:
             return _serialize_request(row) if row else None
 
     def approve_request(
-        self, request_id: str, *, approver_user_id: str
+        self,
+        request_id: str,
+        *,
+        approver_user_id: str,
+        sales_user_id: str | None = None,
     ) -> dict[str, Any]:
         self._validate_uuid(request_id)
         self._validate_uuid(approver_user_id)
         uid = uuid.UUID(approver_user_id)
+        sales_uid: uuid.UUID | None = None
+        if sales_user_id:
+            self._validate_uuid(sales_user_id)
+            sales_uid = uuid.UUID(sales_user_id)
 
         with get_session() as session:
             req = session.get(CompanyRegistrationRequest, uuid.UUID(request_id))
@@ -338,6 +347,9 @@ class RegistrationRequestService:
             req2.status = "APPROVED"
             req2.resolved_company_id = company.id
             req2.resolved_by_user_id = uid
+
+            if sales_uid:
+                session.add(UserCompany(user_id=sales_uid, company_id=company.id))
 
             session.commit()
             session.refresh(req2)

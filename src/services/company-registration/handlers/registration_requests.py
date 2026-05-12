@@ -128,8 +128,12 @@ def get_request(request_id: str):
 def approve_request(request_id: str):
     try:
         user = _require_staff()
+        body = app.current_event.json_body or {}
+        sales_user_id = body.get("sales_user_id") or None
         data = _svc.approve_request(
-            request_id, approver_user_id=user["id"]
+            request_id,
+            approver_user_id=user["id"],
+            sales_user_id=sales_user_id,
         )
         return {
             "statusCode": 200,

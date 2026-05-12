@@ -330,6 +330,7 @@ class UserService:
         *,
         limit: int = 50,
         offset: int = 0,
+        role: str | None = None,
     ) -> dict[str, Any]:
         with get_session() as session:
             stmt = (
@@ -338,6 +339,8 @@ class UserService:
                 .limit(limit)
                 .offset(offset)
             )
+            if role:
+                stmt = stmt.where(User.role == role.upper())
             rows = list(session.scalars(stmt).all())
             users: list[dict[str, Any]] = []
             for u in rows:

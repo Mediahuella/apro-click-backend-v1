@@ -88,7 +88,8 @@ def list_users():
         limit = int(params.get("limit", "50"))
         offset = int(params.get("offset", "0"))
 
-        result = user_service.list_users(limit=limit, offset=offset)
+        role = params.get("role")
+        result = user_service.list_users(limit=limit, offset=offset, role=role)
         return {"statusCode": 200, "message": "Users retrieved", "data": result}
 
     except Exception:
