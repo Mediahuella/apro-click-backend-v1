@@ -233,6 +233,7 @@ class RegistrationRequestService:
         *,
         approver_user_id: str,
         sales_user_id: str | None = None,
+        company_type: str | None = None,
     ) -> dict[str, Any]:
         self._validate_uuid(request_id)
         self._validate_uuid(approver_user_id)
@@ -252,7 +253,11 @@ class RegistrationRequestService:
                 )
             payload = req.payload if isinstance(req.payload, dict) else {}
             company_name = (payload.get("company_name") or "").strip()
-            company_type = (payload.get("company_type") or "SMALL").strip().upper()
+            company_type = (
+                company_type.strip().upper()
+                if company_type
+                else (payload.get("company_type") or "SMALL").strip().upper()
+            )
             payment_type = (payload.get("payment_type") or "DIRECT").strip().upper()
             contact_email = (payload.get("contact_email") or "").strip()
             contact_name = (payload.get("contact_name") or "").strip()
