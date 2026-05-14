@@ -32,6 +32,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from database.models.company import Company
+from database.models.registration_request import CompanyRegistrationRequest
 from database.models.user_company import UserCompany
 from database.user_context import attach_order_company_ids
 from database.models.user import (
@@ -429,6 +430,12 @@ class UserService:
             sub = user.cognito_sub
             email = user.email
             _remove_user_from_cognito_pool(email, sub)
+
+            # Desreferenciar solicitudes resueltas por este usuario antes de borrar
+            session.query(CompanyRegistrationRequest).filter(
+                CompanyRegistrationRequest.resolved_by_user_id == user.id
+            ).update({"resolved_by_user_id": None}, synchronize_session=False)
+
             session.delete(user)
             session.commit()
 
