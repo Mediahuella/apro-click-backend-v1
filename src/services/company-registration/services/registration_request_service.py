@@ -1,10 +1,13 @@
 """Solicitudes de registro de empresa: bandeja, alta pública y aprobación con Shopify."""
 from __future__ import annotations
 
+import logging
 import sys
 import uuid
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,11 +33,15 @@ for path in possible_shared_paths:
 from database.engine import get_session  # noqa: E402
 from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
+from database.models.price_list import ShopifyPriceSegment  # noqa: E402
 from database.models.registration_request import (  # noqa: E402
     CompanyRegistrationRequest,
 )
+from database.models.user import User  # noqa: E402
 from database.models.user_company import UserCompany  # noqa: E402
+from utils.chile_shopify_zone import zone_code_to_region_name  # noqa: E402
 from utils.rut import format_rut_stored  # noqa: E402
+from notifications.sqs_publisher import encolar_aprobacion, encolar_nueva_solicitud, encolar_rechazo  # noqa: E402
 from utils.shipping_payload import (  # noqa: E402
     canonical_shipping_payload,
     merge_body_shipping_into_payload,
@@ -42,13 +49,74 @@ from utils.shipping_payload import (  # noqa: E402
 )
 from utils.shopify_customers import (  # noqa: E402
     ShopifyAPIError,
+    add_locations_to_catalog,
     ensure_shopify_b2b_company,
     format_shopify_api_error_detail,
     resolve_shop_and_token,
 )
 
+_COMPANY_TYPE_TO_SEGMENT: dict[str, str] = {
+    "SMALL": "PYME",
+    "MEDIUM": "MEDIANA",
+    "BIG": "GRAN_EMPRESA",
+}
+
 VALID_COMPANY_TYPES = {"SMALL", "MEDIUM", "BIG"}
 VALID_PAYMENT_TYPES = {"DIRECT", "CREDIT"}
+
+
+def _sync_new_company_to_catalog(
+    *,
+    shop_domain: str,
+    access_token: str,
+    company_type: str,
+    location_gids: list[str],
+) -> None:
+    """Agrega las CompanyLocations de la empresa recién aprobada al catálogo B2B de su segmento.
+
+    No lanza: los errores se loguean como warnings para no bloquear la aprobación.
+    """
+    if not location_gids:
+        logger.warning(
+            "_sync_new_company_to_catalog: no se recibieron location_gids de Shopify "
+            "(companyCreate no devolvió locations). Usar rebuild-catalog para enlazarlas.",
+            extra={"company_type": company_type},
+        )
+        return
+
+    segment = _COMPANY_TYPE_TO_SEGMENT.get(company_type)
+    if not segment:
+        return
+
+    with get_session() as session:
+        seg_row = session.scalar(
+            select(ShopifyPriceSegment).where(ShopifyPriceSegment.segment == segment)
+        )
+        catalog_gid = seg_row.catalog_gid if seg_row else None
+
+    if not catalog_gid:
+        logger.warning(
+            "_sync_new_company_to_catalog: el catálogo del segmento %s no existe aún en BD. "
+            "Subir un Excel de precios para crearlo; luego usar rebuild-catalog.",
+            segment,
+            extra={"company_type": company_type, "location_gids": location_gids},
+        )
+        return
+
+    try:
+        add_locations_to_catalog(shop_domain, access_token, catalog_gid, location_gids)
+        logger.info(
+            "_sync_new_company_to_catalog: locations agregadas al catálogo %s",
+            segment,
+            extra={"locations": len(location_gids)},
+        )
+    except Exception as e:
+        logger.warning(
+            "_sync_new_company_to_catalog: no se pudo agregar al catálogo %s — %s",
+            segment,
+            e,
+            extra={"location_gids": location_gids},
+        )
 
 # API (docs) <-> base de datos
 _STATUS_DB_TO_API: dict[str, str] = {
@@ -131,6 +199,20 @@ def _serialize_request(req: CompanyRegistrationRequest) -> dict[str, Any]:
 
 
 class RegistrationRequestService:
+    def _get_admin_emails(self) -> list[str]:
+        """Obtiene emails de todos los SUPERADMIN y ADMIN activos desde la DB."""
+        try:
+            with get_session() as session:
+                users = session.scalars(
+                    select(User)
+                    .where(User.role.in_(["SUPERADMIN", "ADMIN"]))
+                    .where(User.status == "ACTIVE")
+                ).all()
+                return [u.email for u in users if u.email]
+        except Exception as e:
+            logger.error("Error obteniendo admin emails", extra={"error": str(e)})
+            return []
+
     def create_public_request(self, body: dict[str, Any]) -> dict[str, Any]:
         company_name = (body.get("company_name") or "").strip()
         rut_raw = body.get("rut")
@@ -192,7 +274,18 @@ class RegistrationRequestService:
             session.add(row)
             session.commit()
             session.refresh(row)
-            return _serialize_request(row)
+            result = _serialize_request(row)
+
+        admin_emails = self._get_admin_emails()
+        encolar_nueva_solicitud(
+            admin_emails=admin_emails,
+            company_name=company_name,
+            rut=rut_stored,
+            contact_name=contact_name,
+            contact_email=contact_email,
+            request_id=str(row.id),
+        )
+        return result
 
     @staticmethod
     def _assert_no_pending_rut(session: Session, rut_stored: str) -> None:
@@ -234,6 +327,7 @@ class RegistrationRequestService:
         approver_user_id: str,
         sales_user_id: str | None = None,
         company_type: str | None = None,
+        billing_giro: str | None = None,
     ) -> dict[str, Any]:
         self._validate_uuid(request_id)
         self._validate_uuid(approver_user_id)
@@ -315,7 +409,12 @@ class RegistrationRequestService:
 
             merged = canonical_shipping_payload(payload)
             billing_rut = (payload.get("rut") or "").strip() or None
-            billing_giro = (payload.get("giro") or "").strip() or None
+
+            # billing_giro: override del admin tiene prioridad; si no, lo que envió la empresa.
+            _giro_override = (billing_giro or "").strip()
+            _giro_payload = (payload.get("giro") or "").strip()
+            billing_giro_final = (_giro_override or _giro_payload) or None
+
             billing_direccion = (payload.get("direccion") or "").strip()
             if not billing_direccion:
                 a1 = (merged.get("shipping_address1") or "").strip()
@@ -324,7 +423,13 @@ class RegistrationRequestService:
                 parts = [p for p in (a1, a2, ciudad) if p]
                 billing_direccion = ", ".join(parts) if parts else ""
             billing_direccion = billing_direccion.strip() or None
-            billing_region = (merged.get("shipping_zone_code") or "").strip() or None
+
+            # billing_region: convertir código de zona al nombre oficial de la región.
+            zone_raw = (merged.get("shipping_zone_code") or "").strip()
+            billing_region = zone_code_to_region_name(zone_raw) if zone_raw else None
+            if not billing_region:
+                # Si no se pudo resolver (zona no chilena u otro formato), guardar el valor crudo.
+                billing_region = zone_raw or None
 
             company = Company(
                 name=company_name,
@@ -333,7 +438,7 @@ class RegistrationRequestService:
                 shopify_company_id=shopify_company_id,
                 billing_rut=billing_rut,
                 billing_razon_social=company_name,
-                billing_giro=billing_giro,
+                billing_giro=billing_giro_final,
                 billing_direccion=billing_direccion,
                 billing_region=billing_region,
             )
@@ -363,7 +468,21 @@ class RegistrationRequestService:
             out["created_company"] = company.to_dict()
             out["created_client"] = client.to_dict()
             out["shopify_b2b"] = shopify_b2b
-            return out
+
+        # Agregar la CompanyLocation al catálogo B2B del segmento correspondiente.
+        _sync_new_company_to_catalog(
+            shop_domain=shop,
+            access_token=token,
+            company_type=company_type,
+            location_gids=shopify_b2b.get("shopify_company_location_gids") or [],
+        )
+
+        encolar_aprobacion(
+            contact_email=payload.get("contact_email", ""),
+            contact_name=payload.get("contact_name", ""),
+            company_name=company_name,
+        )
+        return out
 
     def reject_request(
         self,
@@ -392,7 +511,16 @@ class RegistrationRequestService:
                 req.notes = f"{prev}\n{block}".strip() if prev else block
             session.commit()
             session.refresh(req)
-            return _serialize_request(req)
+            payload = req.payload if isinstance(req.payload, dict) else {}
+            result = _serialize_request(req)
+
+        encolar_rechazo(
+            contact_email=payload.get("contact_email", ""),
+            contact_name=payload.get("contact_name", ""),
+            company_name=payload.get("company_name", ""),
+            reason=reason,
+        )
+        return result
 
     @staticmethod
     def _validate_uuid(value: str) -> None:

@@ -50,7 +50,9 @@ backend-v1/
 │   ├── sls_cli.py            # Comando base `npx sls deploy`
 │   ├── dotenv_loader.py      # Carga .env raíz sin pisar exports de shell
 │   ├── build_shipping_data.py# npm run shipping:build-data
-│   └── sync_stock_bulk.py    # npm run sync:stock / sync:stock:all / sync:stock:dry
+│   ├── sync_stock_bulk.py    # npm run sync:stock / sync:stock:all / sync:stock:dry
+│   ├── rebuild_catalogs.py   # Reconstruye Catalogs B2B en Shopify por segmento
+│   └── backfill_company_contacts.py  # Enlaza mainContact a empresas Shopify sin contacto principal
 ├── src/
 │   ├── serverless.provider.yml          # Provider base (runtime, layers, httpApi, CORS)
 │   ├── serverless.package.yml           # Patrones de empaquetado por servicio
@@ -106,13 +108,14 @@ Cada subdirectorio de `src/services/` es un stack Serverless independiente (un `
 | `shipping` | `apro-click-admin-shipping` | Cotización envíos + Shopify CarrierService callback + registro |
 | `quotes` | `apro-click-admin-quotes` | Cotizaciones (handlers de negocio) |
 | `leads` | `apro-click-admin-leads` | Leads (placeholder + health) |
-| `notifications` | `apro-click-admin-notifications` | Notificaciones (placeholder + health) |
+| `notifications` | `apro-click-admin-notifications` | Cola SQS `NotificationsQueue` + worker Lambda `emailWorker` (SES). Dueño del envío de emails de la plataforma. |
 | `chat` | `apro-click-admin-chat` | API HTTP del chat |
 | `chat-ws` | `apro-click-admin-chat-ws` | **WebSocket API** + **DynamoDB** `ws-connections` (TTL + GSI por conversación) |
 
-**Dependencias entre stacks (CloudFormation `Fn::ImportValue`):** el stack `users` exporta `cognito-user-pool-id`, `cognito-user-pool-arn` y `cognito-app-client-id`. El resto los importa. Por lo tanto, en un entorno nuevo **`users` debe deployarse primero**.
+**Dependencias entre stacks (CloudFormation `Fn::ImportValue`):** el stack `users` exporta `cognito-user-pool-id`, `cognito-user-pool-arn` y `cognito-app-client-id`. El stack `notifications` exporta `notifications-queue-url` y `notifications-queue-arn`. En un entorno nuevo **`users` y `notifications` deben deployarse antes que el resto**.
 
 Outputs adicionales relevantes:
+- `notifications` → `notifications-queue-url`, `notifications-queue-arn`, `notifications-dlq-url`
 - `prices` → `prices-uploads-bucket`, `prices-uploads-queue-url`, `prices-uploads-queue-arn`
 - `orders` → `inventory-sync-queue-url`, `inventory-sync-queue-arn`, `inventory-sync-dlq-url`
 - `chat-ws` → `ws-api-id`, `ws-endpoint`, `ws-connections-table-arn`
@@ -273,6 +276,15 @@ Por defecto ejecuta `shared:sync` antes del deploy. Para omitir: `--no-sync`. Si
 | `npm run sync:stock:all` | Igual, incluyendo stock 0 / negativo |
 | `npm run sync:stock:dry` | Dry-run del sync de stock |
 
+## Scripts operativos de mantenimiento Shopify B2B
+
+Ejecutar desde la raíz de `backend-v1/` (requieren `.env` con `DATABASE_URL` y opcionalmente `SHOPIFY_SHOP`):
+
+| Script | Uso |
+|--------|-----|
+| `python3 scripts/rebuild_catalogs.py` | Reconstruye Catalogs B2B para uno o todos los segmentos (PYME / MEDIANA / GRAN_EMPRESA). Útil cuando hay empresas aprobadas sin catálogo. `--dry-run` para solo ver estado. |
+| `python3 scripts/backfill_company_contacts.py` | Detecta empresas Shopify sin `mainContact` y lo corrige. Soporta `--dry-run` y `--company-id <id>` para procesar una sola empresa. |
+
 ## Convenciones de código
 
 - Handlers: `handlers/<nombre>.py` → en YAML: `handler: handlers/<nombre>.lambda_handler`.
@@ -282,9 +294,12 @@ Por defecto ejecuta `shared:sync` antes del deploy. Para omitir: `--no-sync`. Si
 - Modelos ORM: definir en `src/shared/database/models/`, re-exportar en `<servicio>/models/`. Importar en `__init__.py` de shared para que Alembic los detecte.
 - Sesiones DB: `with get_session() as session:` + `session.commit()` explícito. **No** dejar sesiones abiertas entre invocaciones.
 - Cognito: usar `shared/cognito/client.py` (no boto3 directo) para mantener helpers consistentes.
+- Notificaciones por email: usar `shared/notifications/sqs_publisher.py` (`encolar_nueva_solicitud`, `encolar_aprobacion`, `encolar_rechazo`) en lugar de llamar SES directamente. El servicio `notifications` es el único dueño de las credenciales SES. Para agregar un nuevo tipo: añadir `notify_xxx()` en `shared/notifications/ses_email.py`, registrarlo en `_HANDLERS` de `notifications/handlers/email_worker.py`, correr `npm run shared:sync`, redeploy `notifications`.
 - Paginación: `offset` + `limit` (no `last_evaluated_key` de DynamoDB).
 - Respuestas HTTP API: payload 2.0; CORS abierto en `httpApi` (provider base) para desarrollo.
 - Versión Shopify Admin API por defecto: `2026-04` (overridable con `SHOPIFY_API_VERSION`).
+- **Shopify B2B — `mainContact` obligatorio:** al crear una empresa con `companyCreate` sin `companyContact` (caso cliente existente), Shopify crea el contacto con `companyAssignCustomerAsContact` pero **no lo designa como `mainContact`** automáticamente. Siempre llamar `companyAssignMainContact` después. El helper `set_main_contact()` en `company-registration/utils/shopify_customers.py` lo hace. Sin `mainContact` el cliente no puede comprar B2B.
+- **Funciones públicas en `company-registration/utils/shopify_customers.py`:** `ensure_shopify_b2b_company` (crea empresa + contacto + mainContact), `get_company_contact_info` (consulta mainContact y lista de contactos), `assign_customer_as_contact`, `set_main_contact`.
 
 ## Antes de modificar infraestructura o desplegar
 

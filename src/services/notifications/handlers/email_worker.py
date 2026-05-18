@@ -1,0 +1,92 @@
+"""Worker SQS — envío de notificaciones por email vía AWS SES.
+
+Consume la cola NotificationsQueue. Cada mensaje indica el tipo de
+notificación y sus parámetros. Devuelve batchItemFailures para que SQS
+solo reintente los mensajes que fallaron.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+from aws_lambda_powertools import Logger
+from aws_lambda_powertools.utilities.typing import LambdaContext
+
+service_root = Path(__file__).resolve().parent.parent
+if str(service_root) not in sys.path:
+    sys.path.insert(0, str(service_root))
+
+lambda_root = "/var/task"
+if lambda_root not in sys.path:
+    sys.path.insert(0, lambda_root)
+
+possible_shared_paths = [
+    Path("/var/task/shared"),
+    service_root / "shared",
+]
+for path in possible_shared_paths:
+    if path.exists() and (path / "database").exists():
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+        break
+
+from notifications.ses_email import notify_approval, notify_new_request, notify_rejection  # noqa: E402
+
+logger = Logger()
+
+_HANDLERS: dict[str, Any] = {
+    "nueva_solicitud": lambda p: notify_new_request(
+        admin_emails=p["admin_emails"],
+        company_name=p["company_name"],
+        rut=p["rut"],
+        contact_name=p["contact_name"],
+        contact_email=p["contact_email"],
+        request_id=p["request_id"],
+    ),
+    "solicitud_aprobada": lambda p: notify_approval(
+        contact_email=p["contact_email"],
+        contact_name=p["contact_name"],
+        company_name=p["company_name"],
+    ),
+    "solicitud_rechazada": lambda p: notify_rejection(
+        contact_email=p["contact_email"],
+        contact_name=p["contact_name"],
+        company_name=p["company_name"],
+        reason=p.get("reason"),
+    ),
+}
+
+
+def _procesar(record: dict[str, Any]) -> None:
+    raw = record.get("body", "")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("mensaje SQS sin body")
+    data = json.loads(raw)
+    tipo = data.get("tipo")
+    params = data.get("params") or {}
+    handler = _HANDLERS.get(tipo)
+    if not handler:
+        logger.warning("tipo de notificación desconocido — ignorando", extra={"tipo": tipo})
+        return
+    handler(params)
+
+
+def lambda_handler(event: dict, context: LambdaContext) -> dict:
+    records = event.get("Records") or []
+    failures: list[dict[str, str]] = []
+
+    for record in records:
+        message_id = record.get("messageId") if isinstance(record, dict) else None
+        try:
+            _procesar(record if isinstance(record, dict) else {})
+        except Exception:
+            logger.exception(
+                "email_worker — error procesando mensaje",
+                extra={"messageId": message_id},
+            )
+            if message_id:
+                failures.append({"itemIdentifier": message_id})
+
+    return {"batchItemFailures": failures}

@@ -30,6 +30,9 @@ provider:
     COMPANY_REGISTRATION_API_KEY: ${env:COMPANY_REGISTRATION_API_KEY, ''}
     # Admin API GraphQL (/admin/api/<version>/graphql.json) — write_customers + read_customers
     SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    # Cola SQS del servicio notifications para envío de emails
+    NOTIFICATIONS_QUEUE_URL:
+      Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-url
   iam:
     role:
       statements:
@@ -38,6 +41,11 @@ provider:
             - cognito-idp:GetUser
           Resource:
             Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-arn
 
 functions:
   health:

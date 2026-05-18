@@ -16,7 +16,7 @@ Lee y sigue **`AGENTS.md`** en la raíz: requisitos, estructura completa, lista 
 
 ## Servicios actuales
 
-`auth`, `users` (owner del Cognito Pool), `companies`, `company-registration`, `common`, `shopify` (OAuth + billing metadata), `orders` (incluye webhooks Shopify + SQS FIFO de inventory sync), `prices` (Excel B2B → S3 + worker SQS), `shipping` (cotizador + Shopify CarrierService), `quotes`, `leads`, `notifications`, `chat` (HTTP), `chat-ws` (WebSocket API + DynamoDB de conexiones).
+`auth`, `users` (owner del Cognito Pool), `companies`, `company-registration`, `common`, `shopify` (OAuth + billing metadata), `orders` (incluye webhooks Shopify + SQS FIFO de inventory sync), `prices` (Excel B2B → S3 + worker SQS), `shipping` (cotizador + Shopify CarrierService), `quotes`, `leads`, `notifications` (cola SQS estándar + worker SES — dueño de `NotificationsQueue`), `chat` (HTTP), `chat-ws` (WebSocket API + DynamoDB de conexiones).
 
 ## Base de datos y ORM
 
@@ -33,16 +33,26 @@ Lee y sigue **`AGENTS.md`** en la raíz: requisitos, estructura completa, lista 
 - **Roles API** (mayúsculas): `SUPERADMIN`, `ADMIN`, `SALES`, `KPI_VISUALIZERS`. **Grupos Cognito** (minúsculas): `superadmin`, `admin`, `sales`, `kpi_visualizers`. **Estados**: `ACTIVE | DISABLED | PENDING`.
 - **Shopify Admin API**: versión por defecto `2026-04` (override con `SHOPIFY_API_VERSION`). OAuth en `shopify`, pedidos+inventario en `orders`, listas B2B en `prices`, CarrierService en `shipping`. Token offline para scripts: `SHOPIFY_SHOP` + `SHOPIFY_ADMIN_TOKEN`.
 
+## Notificaciones por email
+
+El envío de emails usa una arquitectura desacoplada: el servicio que dispara el evento encola un mensaje SQS; el servicio `notifications` consume la cola y llama a AWS SES.
+
+- **Publicar** una notificación: importar desde `shared/notifications/sqs_publisher.py` (`encolar_nueva_solicitud`, `encolar_aprobacion`, `encolar_rechazo`). El servicio que publica necesita `sqs:SendMessage` + `NOTIFICATIONS_QUEUE_URL` en su `serverless.yml`.
+- **Agregar un nuevo tipo**: añadir la función `notify_xxx()` en `src/shared/notifications/ses_email.py`, registrarla en `_HANDLERS` de `notifications/handlers/email_worker.py`, ejecutar `npm run shared:sync`, redeploy de `notifications`.
+- **Dueño de la cola**: `notifications/serverless.yml` — exporta `apro-click-<stage>-notifications-queue-url` y `…-queue-arn`.
+- **Variables de entorno**: `SES_FROM_EMAIL` y `SES_REGION` solo en `notifications/serverless.yml`. Otros servicios solo necesitan `NOTIFICATIONS_QUEUE_URL`.
+
 ## Antes de sugerir deploy
 
 - Preferir los scripts documentados en `AGENTS.md` (`deploy:service`, `deploy:all`, `sls:service`) en lugar de inventar comandos `serverless`/`sls` distintos, salvo que el usuario pida otra cosa. El comando base es `npx sls deploy --verbose --aws-profile mh-prod --stage <stage>`.
 - Si hay cambios en modelos ORM (`src/shared/database/models/`), generar migración Alembic y ejecutar `npm run shared:sync` antes de deployar.
 - En un entorno nuevo, deployar primero el stack `users` (Cognito Pool) para que el resto pueda importarlo.
+- El stack `notifications` debe deployarse antes que `company-registration` (exporta `apro-click-<stage>-notifications-queue-url` y `…-queue-arn` que `company-registration` importa).
 
 ## Antes de cambiar infraestructura
 
 - **RDS** (instancia, security group, subnet group) y el **bucket S3 de adjuntos del chat** se manejan con Terraform en `infra/` (`main.tf`, `s3_chat.tf`). No crear ni modificar manualmente en la consola AWS.
-- Recursos creados por Serverless (Cognito, bucket S3 de prices, SQS FIFO de inventory, DynamoDB de WebSocket) viven en el `serverless.yml` del servicio dueño; modificarlos requiere redeploy de ese stack.
+- Recursos creados por Serverless (Cognito, bucket S3 de prices, SQS FIFO de inventory, SQS estándar de notifications, DynamoDB de WebSocket) viven en el `serverless.yml` del servicio dueño; modificarlos requiere redeploy de ese stack.
 - `infra/terraform.tfvars` contiene credenciales y está en `.gitignore`. No commitear.
 
 ## Notas operativas

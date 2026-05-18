@@ -9,7 +9,38 @@ custom:
 
 package: ${file(../../serverless.package.yml):package}
 
-provider: ${file(../../serverless.provider.yml):providerBase}
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    # AWS SES — remitente de todos los emails de la plataforma
+    SES_FROM_EMAIL: ${env:SES_FROM_EMAIL, ''}
+    SES_REGION: ${env:SES_REGION, 'us-east-1'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+        - Effect: Allow
+          Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+          Resource:
+            - !GetAtt NotificationsQueue.Arn
 
 functions:
   health:
@@ -18,3 +49,47 @@ functions:
       - httpApi:
           path: /api/v1/health-${self:custom.serviceSlug}
           method: get
+
+  emailWorker:
+    handler: handlers/email_worker.lambda_handler
+    timeout: 28
+    events:
+      - sqs:
+          arn: !GetAtt NotificationsQueue.Arn
+          batchSize: 10
+          maximumBatchingWindow: 5
+          functionResponseType: ReportBatchItemFailures
+
+resources:
+  Resources:
+    NotificationsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-notifications
+        VisibilityTimeout: 90
+        MessageRetentionPeriod: 345600 # 4 días
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt NotificationsDLQ.Arn
+          maxReceiveCount: 3
+
+    NotificationsDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-notifications-dlq
+        MessageRetentionPeriod: 1209600 # 14 días
+
+  Outputs:
+    NotificationsQueueUrl:
+      Value: !Ref NotificationsQueue
+      Export:
+        Name: apro-click-${self:provider.stage}-notifications-queue-url
+
+    NotificationsQueueArn:
+      Value: !GetAtt NotificationsQueue.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-notifications-queue-arn
+
+    NotificationsDLQUrl:
+      Value: !Ref NotificationsDLQ
+      Export:
+        Name: apro-click-${self:provider.stage}-notifications-dlq-url
