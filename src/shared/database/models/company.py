@@ -38,8 +38,8 @@ class Company(Base, TimestampMixin, DictMixin):
     shopify_company_id: Mapped[str | None] = mapped_column(
         String, nullable=True
     )
-    billing_documento: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
+    billing_documento: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Factura", server_default="Factura"
     )
     billing_rut: Mapped[str | None] = mapped_column(String(32), nullable=True)
     billing_razon_social: Mapped[str | None] = mapped_column(

@@ -33,6 +33,7 @@ from database.models.conversation import Conversation
 from database.models.registration_request import CompanyRegistrationRequest
 from database.models.user import User
 from sqlalchemy import delete, update
+from utils.shopify_catalog_sync import sync_company_catalog
 
 logger = Logger()
 
@@ -97,7 +98,7 @@ class CompanyService:
     ) -> dict[str, Any]:
         self._validate_uuid(company_id)
 
-        allowed = {"name", "company_type", "payment_type"}
+        allowed = {"name", "company_type", "payment_type", "billing_giro"}
         filtered: dict[str, Any] = {}
         for k, v in updates.items():
             if k not in allowed or v is None:
@@ -108,17 +109,31 @@ class CompanyService:
                 filtered[k] = self._validate_company_type(str(v))
             elif k == "payment_type":
                 filtered[k] = self._validate_payment_type(str(v))
+            elif k == "billing_giro":
+                s = str(v).strip()
+                if s:
+                    filtered[k] = s
 
         with get_session() as session:
             company = session.get(Company, uuid.UUID(company_id))
             if not company:
                 raise ValueError(f"Company '{company_id}' not found")
 
+            old_company_type = company.company_type
+            shopify_company_id = company.shopify_company_id
+
             for k, v in filtered.items():
                 setattr(company, k, v)
             session.commit()
             session.refresh(company)
-            return company.to_dict()
+            result = company.to_dict()
+
+        # Sincronizar catálogos B2B en Shopify si cambió el tipo de empresa.
+        new_company_type = filtered.get("company_type")
+        if new_company_type and new_company_type != old_company_type:
+            sync_company_catalog(shopify_company_id, old_company_type, new_company_type)
+
+        return result
 
     def delete_company(self, company_id: str) -> bool:
         self._validate_uuid(company_id)

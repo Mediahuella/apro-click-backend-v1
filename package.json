@@ -17,7 +17,9 @@
     "shipping:build-data": "python3 scripts/build_shipping_data.py",
     "sync:stock": "python3 scripts/sync_stock_bulk.py --only-positive",
     "sync:stock:all": "python3 scripts/sync_stock_bulk.py",
-    "sync:stock:dry": "python3 scripts/sync_stock_bulk.py --dry-run --only-positive"
+    "sync:stock:dry": "python3 scripts/sync_stock_bulk.py --dry-run --only-positive",
+    "prices:rebuild-catalogs": "python3 scripts/rebuild_catalogs.py",
+    "prices:rebuild-catalogs:dry": "python3 scripts/rebuild_catalogs.py --dry-run"
   },
   "keywords": [],
   "author": "",

@@ -26,6 +26,8 @@ provider:
     STAGE: ${self:provider.stage}
     REGION: ${self:provider.region}
     DATABASE_URL: ${env:DATABASE_URL, ''}
+    SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    SHOPIFY_SHOP: ${env:SHOPIFY_SHOP, ''}
 
 functions:
   health:

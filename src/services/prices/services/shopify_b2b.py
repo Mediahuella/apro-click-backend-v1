@@ -95,8 +95,8 @@ mutation CatalogCreate($input: CatalogCreateInput!) {
 _CATALOG_CONTEXT_UPDATE = """
 mutation CatalogContextUpdate(
   $catalogId: ID!,
-  $contextsToAdd: [String!],
-  $contextsToRemove: [String!]
+  $contextsToAdd: CatalogContextInput,
+  $contextsToRemove: CatalogContextInput
 ) {
   catalogContextUpdate(
     catalogId: $catalogId,
@@ -390,8 +390,8 @@ def update_catalog_locations(
         _CATALOG_CONTEXT_UPDATE,
         {
             "catalogId": catalog_id,
-            "contextsToAdd": add or None,
-            "contextsToRemove": rm or None,
+            "contextsToAdd": {"companyLocationIds": add} if add else None,
+            "contextsToRemove": {"companyLocationIds": rm} if rm else None,
         },
     )
     payload = data.get("catalogContextUpdate") or {}

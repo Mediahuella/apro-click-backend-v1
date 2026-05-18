@@ -137,9 +137,11 @@ functions:
 
   priceUploadWorker:
     handler: handlers/upload_worker.lambda_handler
-    # El worker hace: parse Excel + lookup ~12k SKU + 3 bulk mutations.
-    # 5 min con memoria alta es holgado para evitar throttling de Shopify.
-    timeout: 300
+    # El worker hace: parse Excel + lookup ~12k SKU + 3 bulk mutations secuenciales.
+    # Shopify sólo permite 1 bulk a la vez: hay que esperar cada una antes de
+    # arrancar la siguiente. Presupuesto real: ~60s variantes + 3×240s wait = 780s.
+    # Se usa el máximo de Lambda (900s) con margen de 120s.
+    timeout: 900
     memorySize: 2048
     events:
       - sqs:
@@ -183,8 +185,9 @@ resources:
       Type: AWS::SQS::Queue
       Properties:
         QueueName: apro-click-${self:provider.stage}-price-uploads
-        # Igual al timeout del worker + margen.
-        VisibilityTimeout: 360
+        # Debe ser mayor al timeout del worker para que SQS no reencole
+        # mientras la Lambda aún está corriendo (timeout worker 900s + 60s margen).
+        VisibilityTimeout: 960
         MessageRetentionPeriod: 345600 # 4 días
         RedrivePolicy:
           deadLetterTargetArn: !GetAtt PriceUploadsDLQ.Arn

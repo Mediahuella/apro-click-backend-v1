@@ -486,13 +486,205 @@ def _assign_user_errors(data: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
-def _shopify_b2b_ids(customer_numeric: str, company_gid: str) -> dict[str, str]:
+_CATALOG_CONTEXT_UPDATE = """
+mutation CatalogContextUpdate(
+  $catalogId: ID!,
+  $contextsToAdd: CatalogContextInput,
+  $contextsToRemove: CatalogContextInput
+) {
+  catalogContextUpdate(
+    catalogId: $catalogId,
+    contextsToAdd: $contextsToAdd,
+    contextsToRemove: $contextsToRemove
+  ) {
+    catalog { id title status }
+    userErrors { field message code }
+  }
+}
+"""
+
+
+def _extract_location_gids(comp: dict[str, Any]) -> list[str]:
+    """Extrae los GIDs de CompanyLocation del dict `company` devuelto por companyCreate."""
+    edges = (comp.get("locations") or {}).get("edges") or []
+    out: list[str] = []
+    for edge in edges:
+        node = edge.get("node") if isinstance(edge, dict) else None
+        gid = node.get("id") if isinstance(node, dict) else None
+        if isinstance(gid, str) and gid:
+            out.append(gid)
+    return out
+
+
+def _shopify_b2b_ids(
+    customer_numeric: str,
+    company_gid: str,
+    location_gids: list[str] | None = None,
+) -> dict[str, Any]:
     cg = str(company_gid)
     return {
         "shopify_customer_numeric_id": customer_numeric,
         "shopify_company_gid": cg,
         "shopify_company_numeric_id": _company_gid_to_numeric_id(cg),
+        "shopify_company_location_gids": location_gids or [],
     }
+
+
+def add_locations_to_catalog(
+    shop_domain: str,
+    access_token: str,
+    catalog_id: str,
+    location_gids: list[str],
+) -> None:
+    """Agrega CompanyLocations a un Catalog B2B existente en Shopify.
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _CATALOG_CONTEXT_UPDATE,
+        {
+            "catalogId": catalog_id,
+            "contextsToAdd": {"companyLocationIds": location_gids},
+            "contextsToRemove": None,
+        },
+    )
+    payload = data.get("catalogContextUpdate") or {}
+    errs = payload.get("userErrors") or []
+    if errs:
+        raise ShopifyAPIError(422, {"userErrors": errs, "message": "catalogContextUpdate"})
+
+
+_QUERY_COMPANY_MAIN_CONTACT = """
+query CompanyMainContact($id: ID!) {
+  company(id: $id) {
+    id
+    name
+    mainContact {
+      id
+      customer {
+        id
+        defaultEmailAddress { emailAddress }
+      }
+    }
+    contacts(first: 20) {
+      nodes {
+        id
+        customer {
+          id
+          defaultEmailAddress { emailAddress }
+        }
+      }
+    }
+  }
+}
+"""
+
+_MUTATION_COMPANY_ASSIGN_MAIN_CONTACT = """
+mutation CompanyAssignMainContact($companyId: ID!, $companyContactId: ID!) {
+  companyAssignMainContact(companyId: $companyId, companyContactId: $companyContactId) {
+    company {
+      id
+      mainContact {
+        id
+        customer { id }
+      }
+    }
+    userErrors { field message code }
+  }
+}
+"""
+
+
+def get_company_contact_info(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+) -> dict[str, Any] | None:
+    """Devuelve ``{mainContact, contacts}`` de la company, o None si Shopify no la encuentra.
+
+    ``mainContact`` es None si no hay contacto principal asignado.
+    ``contacts`` es la lista de CompanyContact con su customer GID.
+    Lanza ``ShopifyAPIError`` si la llamada a Shopify falla.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _QUERY_COMPANY_MAIN_CONTACT,
+        {"id": company_gid},
+    )
+    node = data.get("company")
+    if not isinstance(node, dict):
+        return None
+    contacts_nodes = (node.get("contacts") or {}).get("nodes") or []
+    return {
+        "mainContact": node.get("mainContact") or None,
+        "contacts": contacts_nodes,
+    }
+
+
+def get_company_main_contact(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+) -> dict[str, Any] | None:
+    """Devuelve el dict de mainContact de la company o None si no tiene.
+
+    Lanza ``ShopifyAPIError`` si la llamada a Shopify falla.
+    Devuelve None si Shopify no devuelve la company (borrada o ID inválido).
+    """
+    info = get_company_contact_info(shop_domain, access_token, company_gid)
+    if info is None:
+        return None
+    return info["mainContact"]
+
+
+def set_main_contact(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+    company_contact_gid: str,
+) -> None:
+    """Designa un CompanyContact ya existente como mainContact de la company.
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _MUTATION_COMPANY_ASSIGN_MAIN_CONTACT,
+        {"companyId": company_gid, "companyContactId": company_contact_gid},
+    )
+    payload = data.get("companyAssignMainContact") or {}
+    errs = payload.get("userErrors") or []
+    if errs:
+        raise ShopifyAPIError(422, {"userErrors": errs, "message": "companyAssignMainContact"})
+
+
+def assign_customer_as_contact(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+    customer_numeric_id: str,
+) -> None:
+    """Asigna un Customer existente como CompanyContact de la company.
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        MUTATION_COMPANY_ASSIGN_CUSTOMER,
+        {
+            "companyId": company_gid,
+            "customerId": _to_customer_gid(customer_numeric_id),
+        },
+    )
+    payload = data.get("companyAssignCustomerAsContact") or {}
+    errs = payload.get("userErrors") or []
+    if errs:
+        raise ShopifyAPIError(422, {"userErrors": errs, "message": "companyAssignCustomerAsContact"})
 
 
 def ensure_shopify_b2b_company(
@@ -570,7 +762,20 @@ def ensure_shopify_b2b_company(
                 422,
                 {"userErrors": aerrs, "message": "companyAssignCustomerAsContact"},
             )
-        return _shopify_b2b_ids(existing_numeric, str(company_gid))
+
+        # companyAssignCustomerAsContact crea el contacto pero NO lo marca como mainContact.
+        # Hay que promoverlo explícitamente para que el cliente pueda comprar como B2B.
+        contact_gid = (
+            (assign_data.get("companyAssignCustomerAsContact") or {})
+            .get("companyContact", {})
+            .get("id")
+        )
+        if contact_gid:
+            set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
+
+        return _shopify_b2b_ids(
+            existing_numeric, str(company_gid), _extract_location_gids(comp)
+        )
 
     fn = (first_name or "").strip()
     ln = (last_name or "").strip()
@@ -610,10 +815,12 @@ def ensure_shopify_b2b_company(
             422,
             {"message": "companyCreate no devolvió company.id"},
         )
+    loc_gids = _extract_location_gids(comp)
     if cust_gid:
         return _shopify_b2b_ids(
             _customer_gid_to_numeric_id(str(cust_gid)),
             str(company_gid),
+            loc_gids,
         )
 
     # Carrera: el cliente pudo crearse fuera de mainContact; reintento con assign.
@@ -631,12 +838,19 @@ def ensure_shopify_b2b_company(
             },
         )
         aerrs = _assign_user_errors(assign_data)
-        if not aerrs:
-            return _shopify_b2b_ids(existing2, str(company_gid))
-        raise ShopifyAPIError(
-            422,
-            {"userErrors": aerrs, "message": "companyAssignCustomerAsContact (fallback)"},
+        if aerrs:
+            raise ShopifyAPIError(
+                422,
+                {"userErrors": aerrs, "message": "companyAssignCustomerAsContact (fallback)"},
+            )
+        contact_gid = (
+            (assign_data.get("companyAssignCustomerAsContact") or {})
+            .get("companyContact", {})
+            .get("id")
         )
+        if contact_gid:
+            set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
+        return _shopify_b2b_ids(existing2, str(company_gid), loc_gids)
 
     raise ShopifyAPIError(
         422,

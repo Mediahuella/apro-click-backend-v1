@@ -131,11 +131,13 @@ def approve_request(request_id: str):
         body = app.current_event.json_body or {}
         sales_user_id = body.get("sales_user_id") or None
         company_type = body.get("company_type") or None
+        billing_giro = (body.get("billing_giro") or "").strip() or None
         data = _svc.approve_request(
             request_id,
             approver_user_id=user["id"],
             sales_user_id=sales_user_id,
             company_type=company_type,
+            billing_giro=billing_giro,
         )
         return {
             "statusCode": 200,

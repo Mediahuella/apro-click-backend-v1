@@ -589,21 +589,19 @@ def process_upload(upload_id: uuid_mod.UUID) -> dict[str, Any]:
 
 
 def rebuild_segment_catalog(segment: str) -> dict[str, Any]:
-    """Crea (o intenta crear) el ``Catalog`` Shopify del segmento.
+    """Crea o sincroniza el Catalog Shopify del segmento.
 
-    Pensado para ejecutarse fuera del flujo de upload (endpoint admin) cuando:
-    - El servicio creó el PriceList pero no llegó a crear el Catalog porque no
-      había companies aprobadas en BD.
-    - Se aprobaron nuevas companies y queremos refrescar las associations.
-
-    Reglas:
-    - Si el segmento ya tiene ``catalog_gid`` persistido y el catálogo
-      todavía existe en Shopify (vía ``priceList.catalog``), NO recrea: sólo
-      devuelve el estado actual.
-    - Si no hay ``price_list_gid`` para el segmento, lanza ``ValueError``: hay
-      que subir el primer Excel para tener un PriceList.
-
-    Devuelve un dict con el estado de la operación.
+    Flujo:
+    1. Verifica que exista PriceList para el segmento.
+    2. Resuelve las CompanyLocations actuales desde BD (companies con
+       shopify_company_id del company_type del segmento).
+    3. Si el Catalog ya existe en Shopify: agrega las locations que falten
+       (``catalogContextUpdate``). Devuelve ``SYNCED`` si hubo cambios o
+       ``ALREADY_LINKED`` si ya estaban todas.
+    4. Si no existe: lo crea con todas las locations resueltas. Devuelve
+       ``CREATED``.
+    5. Si no hay locations: devuelve ``NO_LOCATIONS`` (no se puede crear ni
+       sincronizar el Catalog).
     """
     if segment not in VALID_SEGMENTS:
         raise ValueError(
@@ -615,7 +613,6 @@ def rebuild_segment_catalog(segment: str) -> dict[str, Any]:
         seg_cfg = _get_segment_config(session, segment, shop_domain)
         price_list_gid = seg_cfg.price_list_gid
         existing_catalog_gid = seg_cfg.catalog_gid
-        existing_locations = seg_cfg.company_location_ids
         session.commit()
 
     if not price_list_gid:
@@ -623,6 +620,13 @@ def rebuild_segment_catalog(segment: str) -> dict[str, Any]:
             f"Segmento {segment} no tiene PriceList todavía. "
             "Subí primero un Excel para crearlo."
         )
+
+    # Resolver locations actuales en Shopify para las companies del segmento.
+    location_gids, debug = resolve_company_location_ids(
+        segment,
+        shop_domain=shop_domain,
+        access_token=access_token,
+    )
 
     # Verificar el estado real del PriceList y del Catalog en Shopify.
     try:
@@ -642,30 +646,75 @@ def rebuild_segment_catalog(segment: str) -> dict[str, Any]:
     pl_catalog = pl_summary.get("catalog") or None
 
     if pl_catalog and isinstance(pl_catalog, dict):
-        # Ya existe. Si difiere del cache local, sincronizamos la BD.
+        # El Catalog ya existe. Sincronizar locations que puedan faltar.
         cat_id = pl_catalog.get("id")
+
+        # Actualizar cache local si el GID cambió.
         if cat_id and cat_id != existing_catalog_gid:
             with get_session() as s2:
                 seg_cfg2 = _get_segment_config(s2, segment, shop_domain)
                 seg_cfg2.catalog_gid = cat_id
                 s2.commit()
+
+        if not location_gids:
+            return {
+                "segment": segment,
+                "status": "ALREADY_LINKED",
+                "price_list_gid": price_list_gid,
+                "catalog_gid": cat_id,
+                "catalog_title": pl_catalog.get("title"),
+                "catalog_status": pl_catalog.get("status"),
+                "fixed_prices_count": pl_summary.get("fixedPricesCount"),
+                "locations_synced": 0,
+                "message": "Catálogo existe pero no hay companies del segmento para sincronizar.",
+            }
+
+        # Agregar todas las locations actuales (Shopify ignora las que ya estén).
+        try:
+            from services.shopify_b2b import update_catalog_locations
+            update_catalog_locations(
+                shop_domain,
+                access_token,
+                catalog_id=cat_id,
+                add_company_location_ids=location_gids,
+            )
+        except Exception as e:
+            logger.exception(
+                "rebuild_segment_catalog: catalogContextUpdate falló",
+                extra={"segment": segment, "catalog_gid": cat_id},
+            )
+            return {
+                "segment": segment,
+                "status": "FAILED",
+                "error": f"catalogContextUpdate: {e}",
+                "catalog_gid": cat_id,
+                "price_list_gid": price_list_gid,
+            }
+
+        with get_session() as s2:
+            seg_cfg2 = _get_segment_config(s2, segment, shop_domain)
+            seg_cfg2.catalog_gid = cat_id
+            seg_cfg2.company_location_ids = ",".join(location_gids)
+            s2.commit()
+
+        logger.info(
+            "rebuild_segment_catalog: locations sincronizadas",
+            extra={"segment": segment, "locations": len(location_gids)},
+        )
         return {
             "segment": segment,
-            "status": "ALREADY_LINKED",
+            "status": "SYNCED",
             "price_list_gid": price_list_gid,
             "catalog_gid": cat_id,
             "catalog_title": pl_catalog.get("title"),
             "catalog_status": pl_catalog.get("status"),
             "fixed_prices_count": pl_summary.get("fixedPricesCount"),
-            "company_location_ids_db": existing_locations,
+            "company_location_ids": location_gids,
+            "locations_synced": len(location_gids),
+            "source": debug.get("source"),
         }
 
-    # No tiene catalog. Resolvemos locations y creamos.
-    location_gids, debug = resolve_company_location_ids(
-        segment,
-        shop_domain=shop_domain,
-        access_token=access_token,
-    )
+    # No tiene Catalog. Crearlo si hay locations disponibles.
     if not location_gids:
         return {
             "segment": segment,
@@ -673,9 +722,9 @@ def rebuild_segment_catalog(segment: str) -> dict[str, Any]:
             "price_list_gid": price_list_gid,
             "fixed_prices_count": pl_summary.get("fixedPricesCount"),
             "message": (
-                f"No hay CompanyLocations para {segment}: agregá "
+                f"No hay CompanyLocations para {segment}: aprobá "
                 f"companies con company_type='{SEGMENT_COMPANY_TYPE[segment]}' "
-                "y shopify_company_id, o usá la env "
+                "y shopify_company_id, o seteá la env "
                 f"{_SEGMENT_ATTRS[segment]['env_locations']}."
             ),
             "debug": debug,

@@ -160,4 +160,38 @@ def normalize_chile_shopify_zone_code(zone_raw: str) -> str:
     return u_raw
 
 
-__all__ = ["normalize_chile_shopify_zone_code"]
+# Mapeo código ISO 3166-2:CL → nombre oficial de la región (para billing_region en BD).
+ZONE_CODE_TO_REGION_NAME: dict[str, str] = {
+    "CL-AP": "Región de Arica y Parinacota",
+    "CL-TA": "Región de Tarapacá",
+    "CL-AN": "Región de Antofagasta",
+    "CL-AT": "Región de Atacama",
+    "CL-CO": "Región de Coquimbo",
+    "CL-VS": "Región de Valparaíso",
+    "CL-RM": "Región Metropolitana de Santiago",
+    "CL-LI": "Región del Libertador General Bernardo O'Higgins",
+    "CL-ML": "Región del Maule",
+    "CL-NB": "Región de Ñuble",
+    "CL-BI": "Región del Biobío",
+    "CL-AR": "Región de La Araucanía",
+    "CL-LR": "Región de Los Ríos",
+    "CL-LL": "Región de Los Lagos",
+    "CL-AI": "Región de Aysén del General Carlos Ibáñez del Campo",
+    "CL-MA": "Región de Magallanes y de la Antártica Chilena",
+}
+
+
+def zone_code_to_region_name(zone_raw: str) -> str | None:
+    """Convierte cualquier forma de zona chilena al nombre oficial de la región.
+
+    Acepta códigos cortos (``RM``), ISO (``CL-RM``) o nombres parciales.
+    Devuelve ``None`` si no puede resolver.
+    """
+    raw = (zone_raw or "").strip()
+    if not raw:
+        return None
+    iso = normalize_chile_shopify_zone_code(raw)
+    return ZONE_CODE_TO_REGION_NAME.get(iso)
+
+
+__all__ = ["normalize_chile_shopify_zone_code", "zone_code_to_region_name", "ZONE_CODE_TO_REGION_NAME"]
