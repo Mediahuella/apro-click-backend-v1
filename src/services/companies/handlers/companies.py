@@ -31,12 +31,16 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
+from services.address_service import AddressService
 from services.company_service import CompanyService
+from services.contact_service import ContactService
 
 logger = Logger()
 tracer = Tracer()
 app = APIGatewayHttpResolver()
 company_service = CompanyService()
+address_service = AddressService()
+contact_service = ContactService()
 
 
 @app.post("/api/v1/companies")
@@ -126,6 +130,198 @@ def delete_company(company_id: str):
     except Exception:
         logger.exception("Error deleting company")
         raise InternalServerError("Error deleting company")
+
+
+@app.get("/api/v1/companies/<company_id>/addresses")
+@tracer.capture_method
+def list_company_addresses(company_id: str):
+    try:
+        result = address_service.list_addresses(company_id)
+        return {"statusCode": 200, "message": "Addresses retrieved", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except Exception:
+        logger.exception("Error listing company addresses")
+        raise InternalServerError("Error listing addresses")
+
+
+@app.post("/api/v1/companies/<company_id>/addresses")
+@tracer.capture_method
+def create_company_address(company_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        result = address_service.create_address(company_id, body)
+        return {"statusCode": 201, "message": "Address created", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error creating company address")
+        raise InternalServerError("Error creating address")
+
+
+@app.get("/api/v1/companies/<company_id>/addresses/<address_id>")
+@tracer.capture_method
+def get_company_address(company_id: str, address_id: str):
+    try:
+        result = address_service.get_address(company_id, address_id)
+        if not result:
+            raise NotFoundError(f"Address '{address_id}' not found")
+        return {"statusCode": 200, "message": "Address retrieved", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except NotFoundError:
+        raise
+    except Exception:
+        logger.exception("Error getting company address")
+        raise InternalServerError("Error getting address")
+
+
+@app.put("/api/v1/companies/<company_id>/addresses/<address_id>")
+@tracer.capture_method
+def update_company_address(company_id: str, address_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        if not body:
+            raise BadRequestError("Request body is required")
+        result = address_service.update_address(company_id, address_id, body)
+        return {"statusCode": 200, "message": "Address updated", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error updating company address")
+        raise InternalServerError("Error updating address")
+
+
+@app.delete("/api/v1/companies/<company_id>/addresses/<address_id>")
+@tracer.capture_method
+def delete_company_address(company_id: str, address_id: str):
+    try:
+        address_service.delete_address(company_id, address_id)
+        return {"statusCode": 200, "message": "Address deleted"}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error deleting company address")
+        raise InternalServerError("Error deleting address")
+
+
+@app.get("/api/v1/companies/<company_id>/contacts")
+@tracer.capture_method
+def list_company_contacts(company_id: str):
+    try:
+        result = contact_service.list_contacts(company_id)
+        return {"statusCode": 200, "message": "Contacts retrieved", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except Exception:
+        logger.exception("Error listing company contacts")
+        raise InternalServerError("Error listing contacts")
+
+
+@app.post("/api/v1/companies/<company_id>/contacts")
+@tracer.capture_method
+def create_company_contact(company_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        result = contact_service.create_contact(company_id, body)
+        return {"statusCode": 201, "message": "Contact created", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error creating company contact")
+        raise InternalServerError("Error creating contact")
+
+
+@app.put("/api/v1/companies/<company_id>/contacts/<client_id>")
+@tracer.capture_method
+def update_company_contact(company_id: str, client_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        if not body:
+            raise BadRequestError("Request body is required")
+        result = contact_service.update_contact(company_id, client_id, body)
+        return {"statusCode": 200, "message": "Contact updated", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error updating company contact")
+        raise InternalServerError("Error updating contact")
+
+
+@app.delete("/api/v1/companies/<company_id>/contacts/<client_id>")
+@tracer.capture_method
+def delete_company_contact(company_id: str, client_id: str):
+    try:
+        contact_service.delete_contact(company_id, client_id)
+        return {"statusCode": 200, "message": "Contact removed"}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error deleting company contact")
+        raise InternalServerError("Error deleting contact")
+
+
+@app.post("/api/v1/companies/<company_id>/contacts/<client_id>/main")
+@tracer.capture_method
+def set_company_main_contact(company_id: str, client_id: str):
+    try:
+        result = contact_service.set_main_contact(company_id, client_id)
+        return {"statusCode": 200, "message": "Main contact updated", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error setting main contact")
+        raise InternalServerError("Error setting main contact")
+
+
+@app.get("/api/v1/companies/<company_id>/contacts/<client_id>/locations")
+@tracer.capture_method
+def list_contact_locations(company_id: str, client_id: str):
+    try:
+        result = contact_service.list_contact_locations(company_id, client_id)
+        return {"statusCode": 200, "message": "Locations retrieved", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error listing contact locations")
+        raise InternalServerError("Error listing contact locations")
+
+
+@app.put("/api/v1/companies/<company_id>/contacts/<client_id>/locations")
+@tracer.capture_method
+def set_contact_locations(company_id: str, client_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        address_ids = body.get("address_ids")
+        if not isinstance(address_ids, list):
+            raise BadRequestError("Body debe incluir 'address_ids' como array")
+        result = contact_service.set_contact_locations(
+            company_id, client_id, address_ids
+        )
+        return {"statusCode": 200, "message": "Locations updated", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except LookupError as e:
+        raise InternalServerError(str(e))
+    except Exception:
+        logger.exception("Error setting contact locations")
+        raise InternalServerError("Error setting contact locations")
 
 
 def lambda_handler(event: dict, context: LambdaContext):

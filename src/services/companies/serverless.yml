@@ -55,3 +55,39 @@ functions:
       - httpApi:
           path: /api/v1/companies/{company_id}
           method: delete
+      - httpApi:
+          path: /api/v1/companies/{company_id}/addresses
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}/addresses
+          method: post
+      - httpApi:
+          path: /api/v1/companies/{company_id}/addresses/{address_id}
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}/addresses/{address_id}
+          method: put
+      - httpApi:
+          path: /api/v1/companies/{company_id}/addresses/{address_id}
+          method: delete
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts
+          method: post
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}
+          method: put
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}
+          method: delete
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}/main
+          method: post
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}/locations
+          method: get
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}/locations
+          method: put

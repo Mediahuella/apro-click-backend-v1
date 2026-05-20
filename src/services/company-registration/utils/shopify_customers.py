@@ -437,15 +437,19 @@ def _omit_none_nested(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _build_company_location_input(
+def build_company_location_input(
     company_name: str,
     *,
     shipping_first_name: str | None,
     shipping_last_name: str | None,
     contact_phone: str | None,
     shipping: dict[str, Any],
+    location_name: str | None = None,
 ) -> dict[str, Any]:
-    """`shipping` incluye address1, city, country_code (ISO-2); zip y address2 opcionales."""
+    """`shipping` incluye address1, city, country_code (ISO-2); zip y address2 opcionales.
+
+    Si ``location_name`` se omite, usa ``"<company_name> — Principal"``.
+    """
     fn = (shipping_first_name or "").strip() or "—"
     ln = (shipping_last_name or "").strip() or "—"
     zip_val = str(shipping.get("zip") or "").strip()
@@ -466,14 +470,237 @@ def _build_company_location_input(
     if ph:
         addr["phone"] = ph
 
+    name = (location_name or "").strip() or f"{company_name.strip()} — Principal"
     loc: dict[str, Any] = {
-        "name": f"{company_name.strip()} — Principal",
+        "name": name,
         "shippingAddress": addr,
         "billingSameAsShipping": True,
     }
     if ph:
         loc["phone"] = ph
     return loc
+
+
+# Compat: nombre privado anterior usado dentro de este módulo.
+_build_company_location_input = build_company_location_input
+
+
+def _build_company_address_input(
+    shipping: dict[str, Any],
+    *,
+    first_name: str | None,
+    last_name: str | None,
+    phone: str | None,
+) -> dict[str, Any]:
+    """Construye un ``CompanyAddressInput`` (sin name) para companyLocationAssignAddress."""
+    fn = (first_name or "").strip() or "—"
+    ln = (last_name or "").strip() or "—"
+    addr: dict[str, Any] = {
+        "firstName": fn,
+        "lastName": ln,
+        "address1": shipping["address1"].strip(),
+        "city": shipping["city"].strip(),
+        "countryCode": shipping["country_code"].strip().upper(),
+    }
+    zip_val = str(shipping.get("zip") or "").strip()
+    if zip_val:
+        addr["zip"] = zip_val
+    if shipping.get("address2"):
+        addr["address2"] = str(shipping["address2"]).strip()
+    if shipping.get("zone_code"):
+        addr["zoneCode"] = str(shipping["zone_code"]).strip()
+    ph = (phone or "").strip()
+    if ph:
+        addr["phone"] = ph
+    return addr
+
+
+_MUTATION_COMPANY_LOCATION_CREATE = """
+mutation CompanyLocationCreate($companyId: ID!, $input: CompanyLocationInput!) {
+  companyLocationCreate(companyId: $companyId, input: $input) {
+    companyLocation {
+      id
+      name
+    }
+    userErrors { field message code }
+  }
+}
+"""
+
+_MUTATION_COMPANY_LOCATION_UPDATE = """
+mutation CompanyLocationUpdate($companyLocationId: ID!, $input: CompanyLocationUpdateInput!) {
+  companyLocationUpdate(companyLocationId: $companyLocationId, input: $input) {
+    companyLocation { id name phone }
+    userErrors { field message code }
+  }
+}
+"""
+
+_MUTATION_COMPANY_LOCATION_ASSIGN_ADDRESS = """
+mutation CompanyLocationAssignAddress($locationId: ID!, $address: CompanyAddressInput!, $addressTypes: [CompanyAddressType!]!) {
+  companyLocationAssignAddress(locationId: $locationId, address: $address, addressTypes: $addressTypes) {
+    addresses { id address1 city zip countryCode }
+    userErrors { field message code }
+  }
+}
+"""
+
+_MUTATION_COMPANY_LOCATION_DELETE = """
+mutation CompanyLocationDelete($companyLocationId: ID!) {
+  companyLocationDelete(companyLocationId: $companyLocationId) {
+    deletedCompanyLocationId
+    userErrors { field message code }
+  }
+}
+"""
+
+
+def _to_company_gid(company_id: str) -> str:
+    s = str(company_id).strip()
+    if s.startswith("gid://shopify/Company/"):
+        return s
+    if s.isdigit():
+        return f"gid://shopify/Company/{s}"
+    raise ValueError(f"company id inválido para Shopify: {company_id!r}")
+
+
+def create_company_location(
+    shop_domain: str,
+    access_token: str,
+    *,
+    shopify_company_id: str,
+    company_name: str,
+    shipping: dict[str, Any],
+    location_name: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    phone: str | None = None,
+) -> str:
+    """Crea una CompanyLocation en una empresa B2B existente y devuelve su GID.
+
+    ``shopify_company_id`` puede ser un GID o el id numérico. ``shipping`` usa el
+    mismo shape normalizado que ``shipping_for_shopify_b2b`` (address1, city,
+    country_code obligatorios; zip, address2, zone_code opcionales).
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    location_input = build_company_location_input(
+        company_name,
+        shipping_first_name=first_name,
+        shipping_last_name=last_name,
+        contact_phone=phone,
+        shipping=shipping,
+        location_name=location_name,
+    )
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _MUTATION_COMPANY_LOCATION_CREATE,
+        {
+            "companyId": _to_company_gid(shopify_company_id),
+            "input": location_input,
+        },
+    )
+    payload = data.get("companyLocationCreate") or {}
+    errs = payload.get("userErrors") or []
+    loc = payload.get("companyLocation") or {}
+    location_gid = loc.get("id")
+    if errs or not location_gid:
+        raise ShopifyAPIError(
+            422, {"userErrors": errs, "message": "companyLocationCreate"}
+        )
+    return str(location_gid)
+
+
+def update_company_location(
+    shop_domain: str,
+    access_token: str,
+    *,
+    location_gid: str,
+    name: str | None = None,
+    phone: str | None = None,
+    shipping: dict[str, Any] | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> None:
+    """Actualiza una CompanyLocation existente.
+
+    - ``name``/``phone`` se envían vía ``companyLocationUpdate``.
+    - Si ``shipping`` se incluye, se asigna como SHIPPING + BILLING vía
+      ``companyLocationAssignAddress`` (mantiene ``billingSameAsShipping``).
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    update_input: dict[str, Any] = {}
+    if name is not None:
+        nm = name.strip()
+        if nm:
+            update_input["name"] = nm
+    if phone is not None:
+        ph = phone.strip()
+        update_input["phone"] = ph if ph else None
+
+    if update_input:
+        data = _graphql_request(
+            shop_domain,
+            access_token,
+            _MUTATION_COMPANY_LOCATION_UPDATE,
+            {"companyLocationId": location_gid, "input": update_input},
+        )
+        payload = data.get("companyLocationUpdate") or {}
+        errs = payload.get("userErrors") or []
+        if errs:
+            raise ShopifyAPIError(
+                422, {"userErrors": errs, "message": "companyLocationUpdate"}
+            )
+
+    if shipping is not None:
+        address_input = _build_company_address_input(
+            shipping,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+        )
+        data = _graphql_request(
+            shop_domain,
+            access_token,
+            _MUTATION_COMPANY_LOCATION_ASSIGN_ADDRESS,
+            {
+                "locationId": location_gid,
+                "address": address_input,
+                "addressTypes": ["SHIPPING", "BILLING"],
+            },
+        )
+        payload = data.get("companyLocationAssignAddress") or {}
+        errs = payload.get("userErrors") or []
+        if errs:
+            raise ShopifyAPIError(
+                422,
+                {"userErrors": errs, "message": "companyLocationAssignAddress"},
+            )
+
+
+def delete_company_location(
+    shop_domain: str,
+    access_token: str,
+    location_gid: str,
+) -> None:
+    """Elimina una CompanyLocation en Shopify B2B.
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _MUTATION_COMPANY_LOCATION_DELETE,
+        {"companyLocationId": location_gid},
+    )
+    payload = data.get("companyLocationDelete") or {}
+    errs = payload.get("userErrors") or []
+    if errs:
+        raise ShopifyAPIError(
+            422, {"userErrors": errs, "message": "companyLocationDelete"}
+        )
 
 
 def _company_user_errors(data: dict[str, Any]) -> list[dict[str, Any]]:

@@ -96,7 +96,13 @@ def list_requests():
         limit = int(params.get("limit", "50"))
         offset = int(params.get("offset", "0"))
         status = params.get("status")
-        data = _svc.list_requests(status=status, limit=limit, offset=offset)
+        resolved_company_id = params.get("resolved_company_id")
+        data = _svc.list_requests(
+            status=status,
+            limit=limit,
+            offset=offset,
+            resolved_company_id=resolved_company_id,
+        )
         return {"statusCode": 200, "message": "OK", "data": data}
     except PermissionError as e:
         raise UnauthorizedError(str(e))

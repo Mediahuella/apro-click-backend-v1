@@ -33,6 +33,7 @@ for path in possible_shared_paths:
 from database.engine import get_session  # noqa: E402
 from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
+from database.models.company_address import CompanyAddress  # noqa: E402
 from database.models.price_list import ShopifyPriceSegment  # noqa: E402
 from database.models.registration_request import (  # noqa: E402
     CompanyRegistrationRequest,
@@ -302,14 +303,28 @@ class RegistrationRequestService:
         status: str | None,
         limit: int = 50,
         offset: int = 0,
+        resolved_company_id: str | None = None,
     ) -> dict[str, Any]:
         db_status = _normalize_status_filter(status) if status else None
+        company_uuid: uuid.UUID | None = None
+        if resolved_company_id:
+            try:
+                company_uuid = uuid.UUID(resolved_company_id)
+            except (ValueError, TypeError) as e:
+                raise ValueError(
+                    f"resolved_company_id inválido (esperado UUID): "
+                    f"'{resolved_company_id}'"
+                ) from e
         with get_session() as session:
             stmt = select(CompanyRegistrationRequest).order_by(
                 CompanyRegistrationRequest.created_at.desc()
             )
             if db_status:
                 stmt = stmt.where(CompanyRegistrationRequest.status == db_status)
+            if company_uuid is not None:
+                stmt = stmt.where(
+                    CompanyRegistrationRequest.resolved_company_id == company_uuid
+                )
             stmt = stmt.limit(limit).offset(offset)
             rows = list(session.scalars(stmt))
         return {"requests": [_serialize_request(r) for r in rows]}
@@ -453,6 +468,30 @@ class RegistrationRequestService:
                 phone=contact_phone,
             )
             session.add(client)
+
+            # Sucursal inicial: espejo en BD de la primera CompanyLocation creada en Shopify.
+            initial_location_gids = (
+                shopify_b2b.get("shopify_company_location_gids") or []
+            )
+            if initial_location_gids and shipping.get("address1"):
+                primary_address = CompanyAddress(
+                    company_id=company.id,
+                    label=f"{company_name} — Principal",
+                    is_primary=True,
+                    shopify_location_id=initial_location_gids[0],
+                    address1=str(shipping["address1"]).strip(),
+                    address2=(shipping.get("address2") or None),
+                    city=str(shipping.get("city") or "").strip() or "—",
+                    zone_code=(shipping.get("zone_code") or None),
+                    country_code=str(
+                        shipping.get("country_code") or "CL"
+                    ).strip().upper()[:2],
+                    zip=(shipping.get("zip") or None),
+                    phone=contact_phone,
+                    first_name=(shipping.get("first_name") or first_name),
+                    last_name=(shipping.get("last_name") or last_name),
+                )
+                session.add(primary_address)
 
             req2.status = "APPROVED"
             req2.resolved_company_id = company.id

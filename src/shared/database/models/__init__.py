@@ -1,6 +1,7 @@
 """All SQLAlchemy models — import here so Alembic sees every table."""
 
 from database.models.company import Company
+from database.models.company_address import CompanyAddress
 from database.models.user import User
 from database.models.user_company import UserCompany
 from database.models.client import Client
@@ -14,6 +15,7 @@ from database.models.price_list import PriceListUpload, ShopifyPriceSegment
 
 __all__ = [
     "Company",
+    "CompanyAddress",
     "User",
     "UserCompany",
     "Client",

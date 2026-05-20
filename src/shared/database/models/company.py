@@ -62,3 +62,8 @@ class Company(Base, TimestampMixin, DictMixin):
     user_company_links = relationship(
         "UserCompany", back_populates="company", cascade="all, delete-orphan"
     )
+    addresses = relationship(
+        "CompanyAddress",
+        back_populates="company",
+        cascade="all, delete-orphan",
+    )
