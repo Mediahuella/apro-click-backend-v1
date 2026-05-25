@@ -113,6 +113,27 @@ def list_requests():
         raise InternalServerError("Error listando solicitudes")
 
 
+@app.get("/api/v1/company-registration-requests/referral-stats")
+@tracer.capture_method
+def referral_stats():
+    """KPI por vendedor: cuántas solicitudes captó cada usuario con `referral_code`.
+
+    Auth: ADMIN o SUPERADMIN. Devuelve fila por usuario SALES/SUPERADMIN con código,
+    aunque tenga 0 captaciones.
+    """
+    try:
+        user = _require_staff()
+        if user.get("role") not in {"ADMIN", "SUPERADMIN"}:
+            raise PermissionError("Sólo ADMIN/SUPERADMIN pueden ver el KPI de referidos")
+        data = _svc.get_referral_stats(caller_role=user.get("role"))
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except Exception:
+        logger.exception("Error obteniendo referral stats")
+        raise InternalServerError("Error obteniendo referral stats")
+
+
 @app.get("/api/v1/company-registration-requests/<request_id>")
 @tracer.capture_method
 def get_request(request_id: str):

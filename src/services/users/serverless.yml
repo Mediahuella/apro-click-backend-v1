@@ -40,6 +40,7 @@ provider:
       statements:
         - Effect: Allow
           Action:
+            - cognito-idp:GetUser
             - cognito-idp:AdminCreateUser
             - cognito-idp:AdminGetUser
             - cognito-idp:AdminUpdateUserAttributes
@@ -59,6 +60,13 @@ functions:
     events:
       - httpApi:
           path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  getMyReferralLink:
+    handler: handlers/users.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/users/me/referral-link
           method: get
 
   createUser:

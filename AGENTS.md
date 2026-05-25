@@ -151,6 +151,20 @@ Los modelos SQLAlchemy viven en `src/shared/database/models/` y se copian a cada
 | `PriceListUpload` | (uploads de Excel) | `database/models/price_list.py` |
 | `ShopifyPriceSegment` | (segmentos B2B) | `database/models/price_list.py` |
 
+**Link de invitación (`?from=<code>`)** — `users.referral_code` (unique). Se genera automáticamente para `role` en `{SALES, SUPERADMIN}`:
+
+- En **`create_user`** y al **promover a SALES/SUPERADMIN** en `update_user` (helper `_mint_unique_referral_code`).
+- On-demand vía `GET /api/v1/users/me/referral-link` (servicio `users`, auth Cognito) — devuelve `{ code, role }`; 403 si el rol no aplica. Pieza clave: el handler propaga `UnauthorizedError/ForbiddenError` antes del `except Exception` genérico.
+
+El form público de registro lo reenvía como `referral_code` en el body. `RegistrationRequestService.create_public_request` lo resuelve a `referred_by_user_id` filtrando `User.role.in_(["SALES","SUPERADMIN"]) AND status=ACTIVE` — si no matchea, se persiste sin atribución (no falla la solicitud). Al aprobar (`approve_request`), se propaga a `companies.referred_by_user_id` y se inserta un `UserCompany` automático si el admin no override `sales_user_id`. Migración: `018_referrals.py` (con backfill para SALES preexistentes).
+
+**Endpoints derivados:**
+
+- `GET /api/v1/companies?assigned_user_id=<uuid>` (stack `companies`) — filtra por `OUTER JOIN UserCompany OR companies.referred_by_user_id`, `DISTINCT`. Backbone de la pestaña "Mis empresas" del panel.
+- `GET /api/v1/company-registration-requests/referral-stats` (stack `company-registration`, auth ADMIN/SUPERADMIN) — agrega por vendedor con `func.sum(case(...))`: `total`, `pending`, `approved`, `rejected`, `companies_count`. Devuelve también `totals`. **Importante**: en `serverless.yml` esta ruta se declara **antes** del `{request_id}` para evitar match con el path param.
+
+**Relaciones SQLAlchemy críticas** — con dos FKs entre `companies` y `users` (`users.company_id` ↔ `companies.referred_by_user_id`), las relaciones explicitan `foreign_keys=`. Ver `Company.users` y `User.company` en `database/models/`.
+
 ### Conexión
 
 - La variable `DATABASE_URL` contiene el string PostgreSQL completo (con `sslmode=require`).

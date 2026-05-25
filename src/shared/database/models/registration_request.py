@@ -33,8 +33,14 @@ class CompanyRegistrationRequest(Base, TimestampMixin, DictMixin):
     resolved_by_user_id: Mapped[uuid_mod.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id"), nullable=True
     )
+    #: Vendedor SALES que invitó al cliente vía link `?from=<referral_code>`.
+    #: Resuelto en `create_public_request` a partir del `referral_code` enviado por el form.
+    referred_by_user_id: Mapped[uuid_mod.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # relationships
     resolved_company = relationship("Company")
-    resolved_by = relationship("User")
+    resolved_by = relationship("User", foreign_keys=[resolved_by_user_id])
+    referred_by = relationship("User", foreign_keys=[referred_by_user_id])

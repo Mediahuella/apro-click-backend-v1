@@ -73,10 +73,19 @@ def list_companies():
         params = app.current_event.query_string_parameters or {}
         limit = int(params.get("limit", "50"))
         offset = int(params.get("offset", "0"))
+        assigned_user_id = params.get("assigned_user_id") or None
+        referred_by_user_id = params.get("referred_by_user_id") or None
 
-        result = company_service.list_companies(limit=limit, offset=offset)
+        result = company_service.list_companies(
+            limit=limit,
+            offset=offset,
+            assigned_user_id=assigned_user_id,
+            referred_by_user_id=referred_by_user_id,
+        )
         return {"statusCode": 200, "message": "Companies retrieved", "data": result}
 
+    except ValueError as e:
+        raise BadRequestError(str(e))
     except Exception:
         logger.exception("Error listing companies")
         raise InternalServerError("Error listing companies")

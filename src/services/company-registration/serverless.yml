@@ -65,6 +65,9 @@ functions:
           path: /api/v1/company-registration-requests
           method: get
       - httpApi:
+          path: /api/v1/company-registration-requests/referral-stats
+          method: get
+      - httpApi:
           path: /api/v1/company-registration-requests/{request_id}
           method: get
       - httpApi:

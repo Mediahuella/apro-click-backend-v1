@@ -32,7 +32,8 @@ from database.models.company import Company
 from database.models.conversation import Conversation
 from database.models.registration_request import CompanyRegistrationRequest
 from database.models.user import User
-from sqlalchemy import delete, update
+from database.models.user_company import UserCompany
+from sqlalchemy import delete, update, or_
 from utils.shopify_catalog_sync import sync_company_catalog
 
 logger = Logger()
@@ -80,16 +81,48 @@ class CompanyService:
         *,
         limit: int = 50,
         offset: int = 0,
+        assigned_user_id: str | None = None,
+        referred_by_user_id: str | None = None,
     ) -> dict[str, Any]:
+        """Lista empresas con dos filtros mutuamente compatibles:
+
+        - `assigned_user_id`: cartera amplia — empresas vinculadas vía `UserCompany` M2M
+          o por `companies.referred_by_user_id` (incluye asignaciones manuales del admin).
+        - `referred_by_user_id`: estricto — sólo empresas captadas por el link de
+          invitación del vendedor (`companies.referred_by_user_id == X`). Para el detalle
+          del KPI de referidos donde no querés mezclar con asignación manual.
+        """
         from sqlalchemy import select
 
+        def _parse(name: str, raw: str | None) -> uuid.UUID | None:
+            if not raw:
+                return None
+            try:
+                return uuid.UUID(raw)
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"{name} inválido (UUID): {raw!r}") from e
+
+        assigned_uuid = _parse("assigned_user_id", assigned_user_id)
+        referred_uuid = _parse("referred_by_user_id", referred_by_user_id)
+
         with get_session() as session:
-            stmt = (
-                select(Company)
-                .order_by(Company.created_at.desc())
-                .limit(limit)
-                .offset(offset)
-            )
+            stmt = select(Company)
+            if assigned_uuid is not None:
+                stmt = (
+                    stmt.outerjoin(
+                        UserCompany, UserCompany.company_id == Company.id
+                    )
+                    .where(
+                        or_(
+                            UserCompany.user_id == assigned_uuid,
+                            Company.referred_by_user_id == assigned_uuid,
+                        )
+                    )
+                    .distinct()
+                )
+            if referred_uuid is not None:
+                stmt = stmt.where(Company.referred_by_user_id == referred_uuid)
+            stmt = stmt.order_by(Company.created_at.desc()).limit(limit).offset(offset)
             companies = [c.to_dict() for c in session.scalars(stmt)]
         return {"companies": companies}
 

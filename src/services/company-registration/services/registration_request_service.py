@@ -9,7 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 service_root = Path(__file__).resolve().parent.parent
@@ -64,6 +64,10 @@ _COMPANY_TYPE_TO_SEGMENT: dict[str, str] = {
 
 VALID_COMPANY_TYPES = {"SMALL", "MEDIUM", "BIG"}
 VALID_PAYMENT_TYPES = {"DIRECT", "CREDIT"}
+
+# Vendedores "internos/dev" — sólo SUPERADMIN los ve en el KPI de referidos.
+# Mantener en minúsculas (comparación case-insensitive contra `users.email`).
+_REFERRAL_KPI_HIDDEN_EMAILS: frozenset[str] = frozenset({"zobekdev1@gmail.com"})
 
 
 def _sync_new_company_to_catalog(
@@ -175,6 +179,10 @@ def _serialize_request(req: CompanyRegistrationRequest) -> dict[str, Any]:
         "resolved_by_user_id": str(req.resolved_by_user_id)
         if req.resolved_by_user_id
         else None,
+        "referred_by_user_id": str(req.referred_by_user_id)
+        if req.referred_by_user_id
+        else None,
+        "referral_code": payload.get("referral_code"),
         "submitted_email": req.submitted_email,
         "company_name": payload.get("company_name"),
         "rut": payload.get("rut"),
@@ -225,6 +233,12 @@ class RegistrationRequestService:
         notes = body.get("notes")
         shop_domain = body.get("shop_domain")
         source = (body.get("source") or "shopify_theme").strip()
+        referral_code_raw = body.get("referral_code")
+        referral_code = (
+            referral_code_raw.strip()
+            if isinstance(referral_code_raw, str) and referral_code_raw.strip()
+            else None
+        )
 
         if not company_name:
             raise ValueError("'company_name' es obligatorio")
@@ -267,10 +281,31 @@ class RegistrationRequestService:
 
         with get_session() as session:
             self._assert_no_pending_rut(session, rut_stored)
+            referred_by_user_id: uuid.UUID | None = None
+            if referral_code:
+                payload["referral_code"] = referral_code
+                # Resuelve a un SALES activo. Si el código no matchea, no falla la solicitud
+                # (preferimos perder la atribución antes que rebotar al cliente).
+                sales_row = session.scalar(
+                    select(User.id).where(
+                        User.referral_code == referral_code,
+                        User.role.in_(["SALES", "SUPERADMIN"]),
+                        User.status == "ACTIVE",
+                    )
+                )
+                if sales_row is not None:
+                    referred_by_user_id = sales_row
+                else:
+                    logger.warning(
+                        "create_public_request: referral_code %s no resolvió a un SALES/SUPERADMIN activo",
+                        referral_code,
+                    )
+
             row = CompanyRegistrationRequest(
                 status="PENDING",
                 payload=payload,
                 submitted_email=contact_email,
+                referred_by_user_id=referred_by_user_id,
             )
             session.add(row)
             session.commit()
@@ -328,6 +363,83 @@ class RegistrationRequestService:
             stmt = stmt.limit(limit).offset(offset)
             rows = list(session.scalars(stmt))
         return {"requests": [_serialize_request(r) for r in rows]}
+
+    def get_referral_stats(self, *, caller_role: str | None = None) -> dict[str, Any]:
+        """KPI por vendedor (SALES + SUPERADMIN con referral_code).
+
+        Conteos por estado: pending, approved, rejected, total. `companies_count`
+        coincide con `approved` (cada solicitud aprobada genera exactamente una
+        empresa con `referred_by_user_id` apuntando al vendedor).
+
+        `caller_role`: si NO es SUPERADMIN, oculta usuarios listados en
+        `_REFERRAL_KPI_HIDDEN_EMAILS` (cuentas internas/dev) y los descuenta de `totals`.
+        """
+        approved_case = case(
+            (CompanyRegistrationRequest.status == "APPROVED", 1), else_=0
+        )
+        pending_case = case(
+            (CompanyRegistrationRequest.status == "PENDING", 1), else_=0
+        )
+        rejected_case = case(
+            (CompanyRegistrationRequest.status == "REJECTED", 1), else_=0
+        )
+
+        with get_session() as session:
+            stmt = (
+                select(
+                    User.id,
+                    User.given_name,
+                    User.family_name,
+                    User.email,
+                    User.role,
+                    User.referral_code,
+                    User.status,
+                    func.count(CompanyRegistrationRequest.id).label("total"),
+                    func.coalesce(func.sum(approved_case), 0).label("approved"),
+                    func.coalesce(func.sum(pending_case), 0).label("pending"),
+                    func.coalesce(func.sum(rejected_case), 0).label("rejected"),
+                )
+                .outerjoin(
+                    CompanyRegistrationRequest,
+                    CompanyRegistrationRequest.referred_by_user_id == User.id,
+                )
+                .where(User.role.in_(["SALES", "SUPERADMIN"]))
+                .where(User.referral_code.isnot(None))
+                .group_by(User.id)
+                .order_by(func.count(CompanyRegistrationRequest.id).desc())
+            )
+            rows = list(session.execute(stmt).all())
+
+        is_superadmin = (caller_role or "").upper() == "SUPERADMIN"
+        vendors = []
+        for r in rows:
+            email = (r.email or "").strip().lower()
+            if not is_superadmin and email in _REFERRAL_KPI_HIDDEN_EMAILS:
+                continue
+            vendors.append(
+                {
+                    "user_id": str(r.id),
+                    "given_name": r.given_name or "",
+                    "family_name": r.family_name or "",
+                    "email": r.email,
+                    "role": r.role,
+                    "status": r.status,
+                    "referral_code": r.referral_code,
+                    "registrations_total": int(r.total or 0),
+                    "registrations_approved": int(r.approved or 0),
+                    "registrations_pending": int(r.pending or 0),
+                    "registrations_rejected": int(r.rejected or 0),
+                    "companies_count": int(r.approved or 0),
+                }
+            )
+        totals = {
+            "vendors_count": len(vendors),
+            "registrations_total": sum(v["registrations_total"] for v in vendors),
+            "registrations_approved": sum(v["registrations_approved"] for v in vendors),
+            "registrations_pending": sum(v["registrations_pending"] for v in vendors),
+            "registrations_rejected": sum(v["registrations_rejected"] for v in vendors),
+        }
+        return {"vendors": vendors, "totals": totals}
 
     def get_request(self, request_id: str) -> dict[str, Any] | None:
         self._validate_uuid(request_id)
@@ -456,9 +568,19 @@ class RegistrationRequestService:
                 billing_giro=billing_giro_final,
                 billing_direccion=billing_direccion,
                 billing_region=billing_region,
+                referred_by_user_id=req2.referred_by_user_id,
             )
             session.add(company)
             session.flush()
+
+            # Si la empresa vino por un link de invitación de un SALES, lo dejamos asignado
+            # como vendedor de cartera vía `UserCompany` (mismo mecanismo que el override manual).
+            if req2.referred_by_user_id and not sales_uid:
+                session.add(
+                    UserCompany(
+                        user_id=req2.referred_by_user_id, company_id=company.id
+                    )
+                )
 
             client = Client(
                 company_id=company.id,

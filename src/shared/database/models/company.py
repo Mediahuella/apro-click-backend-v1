@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 
-from sqlalchemy import Boolean, CheckConstraint, String, Uuid
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base, DictMixin, TimestampMixin
@@ -50,9 +50,19 @@ class Company(Base, TimestampMixin, DictMixin):
     billing_direccion: Mapped[str | None] = mapped_column(
         String(512), nullable=True
     )
+    #: Vendedor SALES que captó originalmente a la empresa (link `?from=<referral_code>`).
+    #: Propagado desde `company_registration_requests.referred_by_user_id` al aprobar.
+    referred_by_user_id: Mapped[uuid_mod.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
 
     # relationships
-    users = relationship("User", back_populates="company")
+    users = relationship(
+        "User",
+        back_populates="company",
+        foreign_keys="User.company_id",
+    )
+    referred_by = relationship("User", foreign_keys=[referred_by_user_id])
     clients = relationship("Client", back_populates="company")
     conversations = relationship("Conversation", back_populates="company")
     shopify_installations = relationship(

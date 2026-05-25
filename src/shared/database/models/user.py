@@ -83,9 +83,19 @@ class User(Base, TimestampMixin, DictMixin):
     )
     #: Código SAP (obligatorio en API si ``role`` es ``SALES``; puede ser NULL si el rol no es ventas).
     codigo_sap: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Código corto opaco para links de invitación (`?from=<code>`).
+    #: Solo se genera para usuarios `role=SALES`; lo consume el formulario de registro
+    #: de empresas (`/pages/registro-empresas?from=...`) para atribuir el alta al vendedor.
+    referral_code: Mapped[str | None] = mapped_column(
+        String(32), unique=True, nullable=True
+    )
 
     # relationships
-    company = relationship("Company", back_populates="users")
+    company = relationship(
+        "Company",
+        back_populates="users",
+        foreign_keys=[company_id],
+    )
     audit_logs = relationship("AuditLog", back_populates="actor")
     seller_conversations = relationship(
         "Conversation", back_populates="seller", foreign_keys="Conversation.seller_user_id"

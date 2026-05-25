@@ -157,6 +157,22 @@ def _normalize_codigo_sap(raw: object | None) -> str | None:
     return s if s else None
 
 
+def _mint_unique_referral_code(session: Session) -> str:
+    """Genera un `referral_code` único (10 chars base64url). Reintenta hasta 8 veces."""
+    import secrets
+
+    for _ in range(8):
+        candidate = secrets.token_urlsafe(8)[:10]
+        clash = session.scalar(
+            select(User.id).where(User.referral_code == candidate)
+        )
+        if not clash:
+            return candidate
+    raise RuntimeError(
+        "No se pudo generar un referral_code único tras varios intentos"
+    )
+
+
 def _resolve_user(session: Session, user_id: str) -> User | None:
     """Resolve by PostgreSQL `users.id` (UUID) or by `cognito_sub` (Cognito)."""
     try:
@@ -290,6 +306,9 @@ class UserService:
                     status="PENDING",
                     company_id=platform_company_id,
                     codigo_sap=sap_n,
+                    referral_code=_mint_unique_referral_code(session)
+                    if role in {"SALES", "SUPERADMIN"}
+                    else None,
                 )
                 session.add(user)
                 session.flush()
@@ -402,6 +421,8 @@ class UserService:
                 user.codigo_sap = _normalize_codigo_sap(updates.get("codigo_sap"))
 
             transitioned_to_sales = prior_role != "SALES" and user.role == "SALES"
+            if user.role in {"SALES", "SUPERADMIN"} and not user.referral_code:
+                user.referral_code = _mint_unique_referral_code(session)
             if user.role != "SALES":
                 user.codigo_sap = None
             elif transitioned_to_sales and not user.codigo_sap:
@@ -489,3 +510,30 @@ class UserService:
             staff_member_gid=gid,
             skip_email_verification=skip,
         )
+
+    # -----------------------------------------------------------------
+    # Referral codes (links de invitación de vendedores SALES)
+    # -----------------------------------------------------------------
+    def ensure_referral_code(self, user_id: str) -> dict[str, Any]:
+        """Devuelve `{ code, role }` del usuario.
+
+        Si el usuario es `SALES` y aún no tiene código, genera uno único y lo persiste.
+        Si el usuario no es `SALES`, lanza `PermissionError` (sólo SALES tienen link).
+        """
+        try:
+            uid = uuid_mod.UUID(user_id)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"user_id inválido (UUID): {user_id!r}") from e
+
+        with get_session() as session:
+            user = session.get(User, uid)
+            if not user:
+                raise ValueError(f"User '{user_id}' not found")
+            if user.role not in {"SALES", "SUPERADMIN"}:
+                raise PermissionError(
+                    "El link de invitación está disponible sólo para SALES y SUPERADMIN"
+                )
+            if not user.referral_code:
+                user.referral_code = _mint_unique_referral_code(session)
+                session.commit()
+            return {"code": user.referral_code, "role": user.role}

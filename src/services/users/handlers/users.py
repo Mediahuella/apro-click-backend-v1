@@ -8,8 +8,10 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
 from aws_lambda_powertools.event_handler.exceptions import (
     BadRequestError,
+    ForbiddenError,
     NotFoundError,
     InternalServerError,
+    UnauthorizedError,
 )
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
@@ -32,12 +34,55 @@ for path in possible_shared_paths:
         break
 
 from services.user_service import UserService
+from utils.cognito_staff import (
+    get_user_by_cognito_access_token,
+    parse_bearer_authorization,
+)
 from utils.company_ids import company_ids_from_request_body
 
 logger = Logger()
 tracer = Tracer()
 app = APIGatewayHttpResolver()
 user_service = UserService()
+
+
+def _headers_dict() -> dict[str, str]:
+    raw = app.current_event.headers
+    if not raw:
+        return {}
+    return {str(k): (v if v is not None else "") for k, v in raw.items()}
+
+
+def _require_authenticated_user() -> dict:
+    token = parse_bearer_authorization(_headers_dict())
+    if not token:
+        raise UnauthorizedError("Se requiere Authorization: Bearer con access token")
+    try:
+        return get_user_by_cognito_access_token(token)
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+
+
+@app.get("/api/v1/users/me/referral-link")
+@tracer.capture_method
+def get_my_referral_link():
+    """Devuelve `{ code }` para que el SALES arme su link `?from=<code>`.
+
+    El frontend compone la URL pública (`NEXT_PUBLIC_PUBLIC_SITE_URL`).
+    """
+    try:
+        user = _require_authenticated_user()
+        result = user_service.ensure_referral_code(user["id"])
+        return {"statusCode": 200, "message": "OK", "data": result}
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        raise
+    except PermissionError as e:
+        raise ForbiddenError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except Exception:
+        logger.exception("Error obteniendo referral link")
+        raise InternalServerError("Error obteniendo referral link")
 
 
 @app.post("/api/v1/users")
