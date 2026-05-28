@@ -307,7 +307,7 @@ class UserService:
                     company_id=platform_company_id,
                     codigo_sap=sap_n,
                     referral_code=_mint_unique_referral_code(session)
-                    if role in {"SALES", "SUPERADMIN"}
+                    if role == "SALES"
                     else None,
                 )
                 session.add(user)
@@ -421,7 +421,7 @@ class UserService:
                 user.codigo_sap = _normalize_codigo_sap(updates.get("codigo_sap"))
 
             transitioned_to_sales = prior_role != "SALES" and user.role == "SALES"
-            if user.role in {"SALES", "SUPERADMIN"} and not user.referral_code:
+            if user.role == "SALES" and not user.referral_code:
                 user.referral_code = _mint_unique_referral_code(session)
             if user.role != "SALES":
                 user.codigo_sap = None
@@ -529,9 +529,9 @@ class UserService:
             user = session.get(User, uid)
             if not user:
                 raise ValueError(f"User '{user_id}' not found")
-            if user.role not in {"SALES", "SUPERADMIN"}:
+            if user.role != "SALES":
                 raise PermissionError(
-                    "El link de invitación está disponible sólo para SALES y SUPERADMIN"
+                    "El link de invitación está disponible sólo para usuarios SALES"
                 )
             if not user.referral_code:
                 user.referral_code = _mint_unique_referral_code(session)

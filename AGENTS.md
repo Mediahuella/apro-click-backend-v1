@@ -298,6 +298,7 @@ Ejecutar desde la raíz de `backend-v1/` (requieren `.env` con `DATABASE_URL` y 
 |--------|-----|
 | `python3 scripts/rebuild_catalogs.py` | Reconstruye Catalogs B2B para uno o todos los segmentos (PYME / MEDIANA / GRAN_EMPRESA). Útil cuando hay empresas aprobadas sin catálogo. `--dry-run` para solo ver estado. |
 | `python3 scripts/backfill_company_contacts.py` | Detecta empresas Shopify sin `mainContact` y lo corrige. Soporta `--dry-run` y `--company-id <id>` para procesar una sola empresa. |
+| `python3 scripts/notify_approved_backfill.py` | Encola emails de aprobación (y opcionalmente rechazo) para `company_registration_requests` que nunca fueron notificadas (`approval_notified_at IS NULL`). Idempotente: una segunda corrida no reenvía. **Siempre empezar con `--dry-run`.** Resuelve la cola SQS vía CFN export `apro-click-<stage>-notifications-queue-url` o flag `--queue-url`. Útil tras habilitar SES por primera vez. |
 
 ## Convenciones de código
 

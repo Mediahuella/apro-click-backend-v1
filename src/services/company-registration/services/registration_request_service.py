@@ -1,6 +1,7 @@
 """Solicitudes de registro de empresa: bandeja, alta pública y aprobación con Shopify."""
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import sys
 import uuid
@@ -164,6 +165,30 @@ def _normalize_status_filter(raw: str | None) -> str | None:
     )
 
 
+def _marcar_notificado(request_id: uuid.UUID, columna: str) -> None:
+    """Setea `approval_notified_at` o `rejection_notified_at` = now() en una sesión nueva.
+
+    Se llama después de encolar el email. Es non-blocking: si falla, se loguea pero
+    no se propaga el error porque el evento de negocio (aprobación/rechazo) ya quedó
+    persistido en la transacción anterior.
+    """
+    if columna not in ("approval_notified_at", "rejection_notified_at"):
+        raise ValueError(f"columna inválida: {columna!r}")
+    try:
+        with get_session() as session:
+            req = session.get(CompanyRegistrationRequest, request_id)
+            if req is None:
+                return
+            setattr(req, columna, dt.datetime.now(dt.UTC))
+            session.commit()
+    except Exception:
+        logger.exception(
+            "no se pudo marcar %s en request %s — el email quedó encolado igual",
+            columna,
+            request_id,
+        )
+
+
 def _serialize_request(req: CompanyRegistrationRequest) -> dict[str, Any]:
     payload = req.payload if isinstance(req.payload, dict) else {}
     api_status = _STATUS_DB_TO_API.get(req.status, req.status.lower())
@@ -289,7 +314,7 @@ class RegistrationRequestService:
                 sales_row = session.scalar(
                     select(User.id).where(
                         User.referral_code == referral_code,
-                        User.role.in_(["SALES", "SUPERADMIN"]),
+                        User.role == "SALES",
                         User.status == "ACTIVE",
                     )
                 )
@@ -297,7 +322,7 @@ class RegistrationRequestService:
                     referred_by_user_id = sales_row
                 else:
                     logger.warning(
-                        "create_public_request: referral_code %s no resolvió a un SALES/SUPERADMIN activo",
+                        "create_public_request: referral_code %s no resolvió a un SALES activo",
                         referral_code,
                     )
 
@@ -403,7 +428,7 @@ class RegistrationRequestService:
                     CompanyRegistrationRequest,
                     CompanyRegistrationRequest.referred_by_user_id == User.id,
                 )
-                .where(User.role.in_(["SALES", "SUPERADMIN"]))
+                .where(User.role == "SALES")
                 .where(User.referral_code.isnot(None))
                 .group_by(User.id)
                 .order_by(func.count(CompanyRegistrationRequest.id).desc())
@@ -643,6 +668,7 @@ class RegistrationRequestService:
             contact_name=payload.get("contact_name", ""),
             company_name=company_name,
         )
+        _marcar_notificado(uuid.UUID(request_id), "approval_notified_at")
         return out
 
     def reject_request(
@@ -681,6 +707,7 @@ class RegistrationRequestService:
             company_name=payload.get("company_name", ""),
             reason=reason,
         )
+        _marcar_notificado(uuid.UUID(request_id), "rejection_notified_at")
         return result
 
     @staticmethod

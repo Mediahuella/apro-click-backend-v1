@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text, Uuid
+import datetime as dt
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +41,15 @@ class CompanyRegistrationRequest(Base, TimestampMixin, DictMixin):
         Uuid, ForeignKey("users.id"), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Timestamp en que se encoló el email de aprobación al solicitante.
+    #: NULL = nunca notificado (típicamente aprobaciones previas a SES habilitado).
+    approval_notified_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Timestamp en que se encoló el email de rechazo al solicitante.
+    rejection_notified_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # relationships
     resolved_company = relationship("Company")
