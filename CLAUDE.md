@@ -16,7 +16,7 @@ Lee y sigue **`AGENTS.md`** en la raíz: requisitos, estructura completa, lista 
 
 ## Servicios actuales
 
-`auth`, `users` (owner del Cognito Pool), `companies`, `company-registration`, `common`, `shopify` (OAuth + billing metadata), `orders` (incluye webhooks Shopify + SQS FIFO de inventory sync), `prices` (Excel B2B → S3 + worker SQS), `shipping` (cotizador + Shopify CarrierService), `quotes`, `leads`, `notifications` (cola SQS estándar + worker SES — dueño de `NotificationsQueue`), `chat` (HTTP), `chat-ws` (WebSocket API + DynamoDB de conexiones).
+`auth`, `users` (owner del Cognito Pool), `companies`, `company-registration`, `common`, `shopify` (OAuth + billing metadata), `orders` (incluye webhooks Shopify + SQS FIFO de inventory sync + job horario EventBridge de reconciliación de stock), `prices` (Excel B2B → S3 + worker SQS), `shipping` (cotizador + Shopify CarrierService), `quotes`, `leads`, `notifications` (cola SQS estándar + worker SES — dueño de `NotificationsQueue`), `chat` (HTTP), `chat-ws` (WebSocket API + DynamoDB de conexiones).
 
 ## Base de datos y ORM
 

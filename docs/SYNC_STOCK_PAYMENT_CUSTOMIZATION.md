@@ -10,6 +10,7 @@ mostrar en checkout.
 flowchart LR
   ShopifyInv[Shopify Inventory] -->|"webhook inventory_levels/update"| WebhookFn["Lambda<br/>shopifyInventoryWebhook<br/>(HTTP API)"]
   Backfill["scripts/sync_stock_bulk.py<br/>(backend-v1, npm run sync:stock)"] -->|"metafieldsSet en lotes"| AdminAPI[Admin GraphQL]
+  Reconcile["Lambda inventoryReconcile<br/>EventBridge rate(1 hour)<br/>Bulk Export → inventoryQuantity"] -->|"metafieldsSet en lotes"| AdminAPI
   WebhookFn -->|"SendMessage<br/>MessageGroupId=inventory_item_id<br/>MessageDeduplicationId=webhook_id"| Queue["SQS FIFO<br/>inventory-stock-sync.fifo"]
   Queue --> Worker["Lambda<br/>inventorySyncWorker"]
   Queue -->|"maxReceiveCount=5"| DLQ[("inventory-stock-sync-dlq.fifo")]
@@ -24,6 +25,11 @@ flowchart LR
 - **Tiempo real (continuo):** este repo serverless. El webhook valida HMAC y
   encola en SQS FIFO; un worker resuelve `inventoryItem -> variant`, suma el
   available entre locations activas y escribe `metafieldsSet`.
+- **Reconciliación periódica (safety-net):** job horario `inventoryReconcile`
+  (EventBridge `rate(1 hour)`) que recorre todas las variantes vía Bulk Export
+  y reescribe `aproclick.stock` con `inventoryQuantity`. Cubre los eventos que
+  el webhook no alcance a procesar (perdidos, fallidos o con la tienda sin
+  token al momento del evento). Ver [sección dedicada](#safety-net--job-horario-de-reconciliación).
 
 ---
 
@@ -36,6 +42,7 @@ flowchart LR
 | `PaymentCustomization` activado en la tienda | `paymentCustomizations` query — debe existir uno con `enabled: true` y el `functionId` correspondiente |
 | Scope `write_products` en `shopify.app.toml` | Ya está. Sirve para escribir metafields de variante. |
 | Scope `read_inventory` | Ya está. Lo necesita el handler para resolver inventory_item → variant + sumar locations. |
+| Scope `read_locations` | **Obligatorio para el worker del webhook.** La query del worker pide `location { isActive }`, que requiere `read_locations`. Sin él, **todos** los webhooks fallan con `Access denied for isActive field` y caen al DLQ. El job horario `inventoryReconcile` y el backfill NO lo necesitan (usan `inventoryQuantity`). Tras agregarlo a `shopify.app.toml` hay que `shopify app deploy` **y re-consentir** la app para que el token offline obtenga el scope. |
 
 > Si todavía no creaste la definición del metafield, usá `metafieldDefinitionCreate` **sin** el campo `access` (para namespace público los únicos válidos son los defaults; ver issue conocido más abajo).
 
@@ -206,6 +213,52 @@ es **un metafield**, y este flujo es el que lo mantiene actualizado.
 
 ---
 
+## Safety-net — Job horario de reconciliación
+
+Aunque el webhook esté sano, eventos pueden perderse (entrega fallida, tienda
+sin token al momento del evento, scope faltante, etc.) y el metafield se
+desincroniza con el tiempo. Para cubrir ese hueco corre un job horario que
+reconstruye `aproclick.stock` de **todas** las variantes.
+
+| Pieza | Archivo |
+|---|---|
+| Handler programado (itera instalaciones activas) | [src/services/orders/handlers/inventory_reconcile.py](../src/services/orders/handlers/inventory_reconcile.py) |
+| Lógica de reconciliación (Bulk Export + metafieldsSet) | [src/services/orders/services/shopify_stock_reconcile.py](../src/services/orders/services/shopify_stock_reconcile.py) |
+| Schedule EventBridge `rate(1 hour)` | [src/services/orders/serverless.yml](../src/services/orders/serverless.yml) (función `inventoryReconcile`) |
+
+### Cómo funciona
+
+1. EventBridge invoca `inventoryReconcile` cada 1 hora (`timeout: 900s`).
+2. El handler recorre todas las `ShopifyAppInstallation` activas (con token).
+3. Por cada tienda: dispara un Bulk Export de `products → variants`
+   (`inventoryQuantity` + `inventoryItem.tracked`), espera a que complete,
+   descarga el JSONL y escribe `metafieldsSet` en lotes de 25 (con backoff ante
+   throttling), acotado por un presupuesto de tiempo (`840s`) para no chocar con
+   el timeout del Lambda.
+
+### Diferencia con el worker del webhook
+
+El job usa el **`inventoryQuantity`** total de la variante, **no** la suma por
+location activa que hace el worker (`shopify_inventory_metafield.py`). Por eso
+el job **no depende de `read_locations`**. Puede haber una diferencia menor si
+hay stock en locations inactivas, aceptada a cambio de un job simple y eficiente
+(un único Bulk Export por tienda en lugar de una query por item).
+
+### Operación
+
+- Logs: filtro `stock reconcile ok` en
+  `/aws/lambda/apro-click-<stage>-inventoryReconcile` (incluye `variants`,
+  `written`, `errors`, `skipped_reason`).
+- `skipped_reason` posibles: `bulk_already_running` (ya había un Bulk Operation
+  en curso para la tienda), `no_data` (tienda sin productos), `no_variants`.
+- Invocación manual para forzar una corrida:
+  `aws lambda invoke --function-name apro-click-<stage>-inventoryReconcile ...`.
+
+> Recordá: en este proyecto el stage `dev` es el que atiende la tienda de
+> producción (`aproclick.myshopify.com`).
+
+---
+
 ## Activación del PaymentCustomization (one-shot)
 
 Después de hacer `shopify app deploy` por primera vez:
@@ -285,6 +338,7 @@ Variables:
 | `paymentCustomizationCreate` falla con "Function not found" | `functionId` mal copiado o app sin deploy | Volver a correr `shopifyFunctions(apiType: "payment_customization")` |
 | `paymentCustomizationCreate` falla con "Access denied" | Falta scope `write_payment_customizations` | Sumarlo a `shopify.app.toml` y reinstalar app |
 | `webhooks/inventory_levels/update` no llega | El topic no está suscrito a la URL correcta | Verificar `shopify.app.toml`, redeploy, y mirar Partners → Webhooks |
+| El metafield no se actualiza y el **DLQ se llena** (`inventory-stock-sync-dlq.fifo`) | El worker falla en cada mensaje. Causa típica vista en prod: `Shopify: Access denied for isActive field. Required access: read_locations`. El webhook llega y encola bien, pero la query del worker pide `location.isActive` sin el scope | Agregar `read_locations` a `shopify.app.toml`, `shopify app deploy`, **re-consentir** la app para regenerar el token offline con el scope. Mientras tanto, el job horario `inventoryReconcile` mantiene el stock al día (no usa ese scope). Revisar logs del worker: `aws logs tail /aws/lambda/apro-click-<stage>-inventorySyncWorker` |
 | `metafieldsSet` devuelve `THROTTLED` en bulk | Lotes muy grandes o `--rate-ms` muy bajo | Subir `--rate-ms=500` o más |
 | Function logs no aparecen | Ejecuciones cacheadas | Cambiar el cart (agregar/quitar item) para forzar nueva ejecución |
 

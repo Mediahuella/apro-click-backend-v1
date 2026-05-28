@@ -66,6 +66,10 @@ _COMPANY_TYPE_TO_SEGMENT: dict[str, str] = {
 VALID_COMPANY_TYPES = {"SMALL", "MEDIUM", "BIG"}
 VALID_PAYMENT_TYPES = {"DIRECT", "CREDIT"}
 
+# RUT de prueba exento del control de duplicados (formato canónico de
+# format_rut_stored). Permite reutilizarlo en cualquiera de sus variantes.
+RUT_DUPLICADO_EXENTO = "76943201-9"
+
 # Vendedores "internos/dev" — sólo SUPERADMIN los ve en el KPI de referidos.
 # Mantener en minúsculas (comparación case-insensitive contra `users.email`).
 _REFERRAL_KPI_HIDDEN_EMAILS: frozenset[str] = frozenset({"zobekdev1@gmail.com"})
@@ -305,7 +309,7 @@ class RegistrationRequestService:
         payload = merge_body_shipping_into_payload(payload, body)
 
         with get_session() as session:
-            self._assert_no_pending_rut(session, rut_stored)
+            self._assert_rut_available(session, rut_stored)
             referred_by_user_id: uuid.UUID | None = None
             if referral_code:
                 payload["referral_code"] = referral_code
@@ -349,13 +353,26 @@ class RegistrationRequestService:
         return result
 
     @staticmethod
-    def _assert_no_pending_rut(session: Session, rut_stored: str) -> None:
-        q = select(CompanyRegistrationRequest.id).where(
-            CompanyRegistrationRequest.status == "PENDING",
-            CompanyRegistrationRequest.payload["rut"].astext == rut_stored,
+    def _assert_rut_available(session: Session, rut_stored: str) -> None:
+        # RUT de prueba exento del control de duplicados (todas sus variantes se
+        # normalizan a este formato vía format_rut_stored).
+        if rut_stored == RUT_DUPLICADO_EXENTO:
+            return
+
+        empresa_existente = session.scalar(
+            select(Company.id).where(Company.billing_rut == rut_stored)
         )
-        if session.scalar(q):
-            raise ValueError("Ya existe una solicitud pendiente para este RUT")
+        if empresa_existente:
+            raise ValueError("Ya existe una empresa registrada con este RUT")
+
+        solicitud_existente = session.scalar(
+            select(CompanyRegistrationRequest.id).where(
+                CompanyRegistrationRequest.status.in_(("PENDING", "APPROVED")),
+                CompanyRegistrationRequest.payload["rut"].astext == rut_stored,
+            )
+        )
+        if solicitud_existente:
+            raise ValueError("Ya existe una solicitud de registro para este RUT")
 
     def list_requests(
         self,

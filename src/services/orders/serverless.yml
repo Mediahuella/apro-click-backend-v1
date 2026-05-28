@@ -102,6 +102,17 @@ functions:
           batchSize: 10
           functionResponseType: ReportBatchItemFailures
 
+  # Safety-net horario: reconcilia aproclick.stock de todas las variantes vía
+  # Bulk Export, por si un webhook inventory_levels/update se pierde.
+  inventoryReconcile:
+    handler: handlers/inventory_reconcile.lambda_handler
+    timeout: 900
+    memorySize: 512
+    events:
+      - schedule:
+          rate: rate(1 hour)
+          enabled: true
+
 resources:
   Resources:
     # -----------------------------------------------------------------
