@@ -32,7 +32,14 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
-from notifications.ses_email import notify_approval, notify_new_request, notify_rejection  # noqa: E402
+from notifications.ses_email import (  # noqa: E402
+    notify_approval,
+    notify_confirmacion_solicitud,
+    notify_cotizacion_lista,
+    notify_new_request,
+    notify_nueva_cotizacion,
+    notify_rejection,
+)
 
 logger = Logger()
 
@@ -55,6 +62,29 @@ _HANDLERS: dict[str, Any] = {
         contact_name=p["contact_name"],
         company_name=p["company_name"],
         reason=p.get("reason"),
+    ),
+    "confirmacion_solicitud": lambda p: notify_confirmacion_solicitud(
+        contact_email=p["contact_email"],
+        contact_name=p.get("contact_name"),
+        company_name=p["company_name"],
+        quote_id=p["quote_id"],
+        lines=p.get("lines") or [],
+    ),
+    "nueva_cotizacion": lambda p: notify_nueva_cotizacion(
+        admin_emails=p["admin_emails"],
+        company_name=p["company_name"],
+        quote_id=p["quote_id"],
+        line_count=p["line_count"],
+        contact_name=p.get("contact_name"),
+        contact_email=p.get("contact_email"),
+    ),
+    "cotizacion_lista": lambda p: notify_cotizacion_lista(
+        contact_email=p["contact_email"],
+        contact_name=p.get("contact_name"),
+        company_name=p["company_name"],
+        folio=p["folio"],
+        pdf_url=p["pdf_url"],
+        total=p.get("total"),
     ),
 }
 

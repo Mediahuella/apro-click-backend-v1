@@ -41,8 +41,9 @@ from database.models.registration_request import (  # noqa: E402
 )
 from database.models.user import User  # noqa: E402
 from database.models.user_company import UserCompany  # noqa: E402
+from utils.apro_ia_client import registrar_cliente as apro_ia_registrar_cliente  # noqa: E402
 from utils.chile_shopify_zone import zone_code_to_region_name  # noqa: E402
-from utils.rut import format_rut_stored  # noqa: E402
+from utils.rut import format_rut_stored, normalize_rut_digits  # noqa: E402
 from notifications.sqs_publisher import encolar_aprobacion, encolar_nueva_solicitud, encolar_rechazo  # noqa: E402
 from utils.shipping_payload import (  # noqa: E402
     canonical_shipping_payload,
@@ -127,6 +128,34 @@ def _sync_new_company_to_catalog(
             e,
             extra={"location_gids": location_gids},
         )
+
+
+def _sync_new_client_to_apro_ia(
+    *,
+    billing_rut: str | None,
+    company_name: str,
+    contact_phone: str | None,
+    contact_email: str | None,
+) -> None:
+    """Registra el cliente recién aprobado en APRO IA (DMS externo).
+
+    No bloquea la aprobación: si APRO IA falla (o no está configurado), se
+    loguea como warning. El backfill masivo (`scripts/backfill_apro_ia_clients.py`)
+    permite reintentar más tarde.
+    """
+    if not billing_rut:
+        logger.warning("_sync_new_client_to_apro_ia: empresa sin billing_rut, se omite")
+        return
+    try:
+        apro_ia_registrar_cliente(
+            rut=normalize_rut_digits(billing_rut),
+            name=company_name,
+            phone=contact_phone or "",
+            email=contact_email or "",
+        )
+        logger.info("_sync_new_client_to_apro_ia: cliente sincronizado con APRO IA")
+    except Exception as e:
+        logger.warning("_sync_new_client_to_apro_ia: no se pudo sincronizar — %s", e)
 
 # API (docs) <-> base de datos
 _STATUS_DB_TO_API: dict[str, str] = {
@@ -572,7 +601,13 @@ class RegistrationRequestService:
             ) from e
 
         with get_session() as session:
-            req2 = session.get(CompanyRegistrationRequest, uuid.UUID(request_id))
+            # SELECT FOR UPDATE: serializa aprobaciones concurrentes para evitar que dos
+            # Lambda simultáneos creen la Company en BD (aunque ambos ya llamaron a Shopify).
+            req2 = session.execute(
+                select(CompanyRegistrationRequest)
+                .where(CompanyRegistrationRequest.id == uuid.UUID(request_id))
+                .with_for_update()
+            ).scalar_one_or_none()
             if not req2 or req2.status != "PENDING":
                 raise ValueError("La solicitud cambió de estado; reintente")
 
@@ -678,6 +713,14 @@ class RegistrationRequestService:
             access_token=token,
             company_type=company_type,
             location_gids=shopify_b2b.get("shopify_company_location_gids") or [],
+        )
+
+        # Registrar el cliente en APRO IA (DMS externo).
+        _sync_new_client_to_apro_ia(
+            billing_rut=billing_rut,
+            company_name=company_name,
+            contact_phone=contact_phone,
+            contact_email=contact_email,
         )
 
         encolar_aprobacion(

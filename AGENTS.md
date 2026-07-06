@@ -111,6 +111,7 @@ Cada subdirectorio de `src/services/` es un stack Serverless independiente (un `
 | `notifications` | `apro-click-admin-notifications` | Cola SQS `NotificationsQueue` + worker Lambda `emailWorker` (SES). Dueño del envío de emails de la plataforma. |
 | `chat` | `apro-click-admin-chat` | API HTTP del chat |
 | `chat-ws` | `apro-click-admin-chat-ws` | **WebSocket API** + **DynamoDB** `ws-connections` (TTL + GSI por conversación) |
+| `error-logs` | `apro-click-admin-error-logs` | Logs de errores del frontend. **DynamoDB** `error-logs` (PK `LOG` + SK `<ISO>#<uid>`, TTL 30 días). `POST /api/v1/error-logs` autenticado (adjunta usuario del token); `GET` solo SUPERADMIN. Auth vía `utils/cognito_staff.py` (espejo de users/company-registration). |
 
 **Dependencias entre stacks (CloudFormation `Fn::ImportValue`):** el stack `users` exporta `cognito-user-pool-id`, `cognito-user-pool-arn` y `cognito-app-client-id`. El stack `notifications` exporta `notifications-queue-url` y `notifications-queue-arn`. En un entorno nuevo **`users` y `notifications` deben deployarse antes que el resto**.
 

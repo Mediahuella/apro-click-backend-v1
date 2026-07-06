@@ -40,6 +40,19 @@ UPLOAD_STATUSES = frozenset(
 
 VALID_SEGMENTS = frozenset({"PYME", "MEDIANA", "GRAN_EMPRESA"})
 
+# Status válidos para ``B2cPriceUpload.status`` (carga de precios B2C/WEB en la
+# tienda Shopify B2C — sin segmentos, escribe el precio por defecto de cada
+# variante).
+B2C_UPLOAD_STATUSES = frozenset(
+    {
+        "PENDING",  # subido, mensaje SQS encolado
+        "PROCESSING",  # worker tomó el job (o continuación re-encolada)
+        "COMPLETED",  # todas las variantes objetivo quedaron actualizadas
+        "PARTIAL",  # hubo errores en algunas variantes
+        "FAILED",  # error fatal antes de poder escribir en Shopify
+    }
+)
+
 
 class PriceListUpload(Base, TimestampMixin, DictMixin):
     """Log de cada Excel subido por el admin para actualizar precios B2B.
@@ -160,4 +173,70 @@ class ShopifyPriceSegment(Base, TimestampMixin, DictMixin):
         Text,
         nullable=True,
         doc="CSV de gid://shopify/CompanyLocation/... asociados al catálogo.",
+    )
+
+
+class B2cPriceUpload(Base, TimestampMixin, DictMixin):
+    """Log de cada Excel subido para actualizar precios B2C/WEB.
+
+    A diferencia de :class:`PriceListUpload` (que arma PriceLists/Catalogs B2B
+    por segmento en la tienda ``aproclick``), este flujo escribe el **precio por
+    defecto** de cada variante (``price`` + ``compareAtPrice`` iguales al valor
+    de la columna "B2C/WEB (iva incluido)") en una tienda B2C **distinta**
+    (``aproltda``), cuyas credenciales viven en variables de entorno del Lambda,
+    no en ``shopify_app_installations``.
+
+    El worker es idempotente: ``productVariantsBulkUpdate`` fija valores
+    absolutos y el diff omite las variantes ya correctas, así que si una
+    invocación se queda sin tiempo re-encola el mismo ``id`` y la siguiente
+    continúa donde quedó.
+    """
+
+    __tablename__ = "b2c_price_uploads"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING','PROCESSING','COMPLETED','PARTIAL','FAILED')",
+            name="ck_b2c_price_uploads_status",
+        ),
+    )
+
+    id: Mapped[uuid_mod.UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid_mod.uuid4
+    )
+    source_filename: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    s3_bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    s3_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PENDING", server_default="PENDING"
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Dominio de la tienda B2C objetivo (informativo / para linkear al admin).
+    shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Métricas del parser + del diff/aplicación (rellenadas por el worker).
+    parsed_items: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    variants_matched: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    variants_updated: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    variants_already_ok: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    variants_missing: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    missing_skus_sample: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    uploaded_by_user_id: Mapped[uuid_mod.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )

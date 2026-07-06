@@ -1,0 +1,89 @@
+service: apro-click-admin-error-logs
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: error-logs
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    ERROR_LOGS_TABLE: apro-click-${self:provider.stage}-error-logs
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:Query
+            - dynamodb:GetItem
+          Resource:
+            - !GetAtt ErrorLogsTable.Arn
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  errorLogs:
+    handler: handlers/error_logs.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/error-logs
+          method: post
+      - httpApi:
+          path: /api/v1/error-logs
+          method: get
+
+resources:
+  Resources:
+    ErrorLogsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: apro-click-${self:provider.stage}-error-logs
+        BillingMode: PAY_PER_REQUEST
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+
+  Outputs:
+    ErrorLogsTableArn:
+      Value: !GetAtt ErrorLogsTable.Arn
+      Export:
+        Name: apro-click-${self:provider.stage}-error-logs-table-arn

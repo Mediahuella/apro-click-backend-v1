@@ -47,6 +47,12 @@ provider:
     PRICES_B2B_GRAN_EMPRESA_LOCATION_IDS: ${env:PRICES_B2B_GRAN_EMPRESA_LOCATION_IDS, ''}
     PRICES_UPLOADS_BUCKET: ${self:custom.uploadsBucketName}
     PRICES_UPLOADS_QUEUE_URL: !Ref PriceUploadsQueue
+    # ---- Carga de precios B2C/WEB (tienda Shopify B2C, distinta de aproclick) ----
+    # Credenciales SOLO en env del Lambda (nunca en BD ni en el frontend).
+    B2C_SHOPIFY_SHOP: ${env:APRO_B2C_URL, ''}
+    B2C_SHOPIFY_ADMIN_TOKEN: ${env:APRO_B2C_TOKEN, ''}
+    B2C_SHOPIFY_API_VERSION: ${env:APRO_B2C_VERSION, '2026-04'}
+    B2C_PRICE_UPLOADS_QUEUE_URL: !Ref B2cPriceUploadsQueue
   iam:
     role:
       statements:
@@ -68,6 +74,7 @@ provider:
             - sqs:SendMessage
           Resource:
             - !GetAtt PriceUploadsQueue.Arn
+            - !GetAtt B2cPriceUploadsQueue.Arn
         - Effect: Allow
           Action:
             - sqs:ReceiveMessage
@@ -76,6 +83,7 @@ provider:
             - sqs:ChangeMessageVisibility
           Resource:
             - !GetAtt PriceUploadsQueue.Arn
+            - !GetAtt B2cPriceUploadsQueue.Arn
 
 functions:
   health:
@@ -149,6 +157,43 @@ functions:
           batchSize: 1
           functionResponseType: ReportBatchItemFailures
 
+  # ---- Carga de precios B2C/WEB ----
+  uploadB2cPriceList:
+    handler: handlers/b2c_uploads.lambda_handler
+    memorySize: 1024
+    timeout: 28
+    events:
+      - httpApi:
+          path: /api/v1/prices/b2c/uploads
+          method: post
+
+  listB2cPriceUploads:
+    handler: handlers/b2c_uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/b2c/uploads
+          method: get
+
+  getB2cPriceUpload:
+    handler: handlers/b2c_uploads.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/prices/b2c/uploads/{upload_id}
+          method: get
+
+  b2cPriceUploadWorker:
+    handler: handlers/b2c_upload_worker.lambda_handler
+    # Export de variantes (~45 calls) + productVariantsBulkUpdate por producto.
+    # Idempotente con deadline: si no alcanza, re-encola la continuación. 900s
+    # de Lambda con margen de 60s para escribir BD + re-encolar.
+    timeout: 900
+    memorySize: 2048
+    events:
+      - sqs:
+          arn: !GetAtt B2cPriceUploadsQueue.Arn
+          batchSize: 1
+          functionResponseType: ReportBatchItemFailures
+
 resources:
   Resources:
     # -----------------------------------------------------------------
@@ -199,6 +244,27 @@ resources:
         QueueName: apro-click-${self:provider.stage}-price-uploads-dlq
         MessageRetentionPeriod: 1209600 # 14 días
 
+    # -----------------------------------------------------------------
+    # SQS — cola de jobs del worker B2C (carga de precios B2C/WEB).
+    # -----------------------------------------------------------------
+    B2cPriceUploadsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-b2c-price-uploads
+        # Mayor al timeout del worker (900s) para que SQS no reencole mientras
+        # el Lambda sigue corriendo (900s + 60s margen).
+        VisibilityTimeout: 960
+        MessageRetentionPeriod: 345600 # 4 días
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt B2cPriceUploadsDLQ.Arn
+          maxReceiveCount: 3
+
+    B2cPriceUploadsDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: apro-click-${self:provider.stage}-b2c-price-uploads-dlq
+        MessageRetentionPeriod: 1209600 # 14 días
+
   Outputs:
     PriceUploadsBucketName:
       Value: !Ref PriceUploadsBucket
@@ -212,3 +278,7 @@ resources:
       Value: !GetAtt PriceUploadsQueue.Arn
       Export:
         Name: apro-click-${self:provider.stage}-prices-uploads-queue-arn
+    B2cPriceUploadsQueueUrl:
+      Value: !Ref B2cPriceUploadsQueue
+      Export:
+        Name: apro-click-${self:provider.stage}-b2c-price-uploads-queue-url

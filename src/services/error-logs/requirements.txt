@@ -1,0 +1,3 @@
+# Dependencias propias del servicio (Powertools va en layer; ver serverless.pythonRequirements.yml)
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9

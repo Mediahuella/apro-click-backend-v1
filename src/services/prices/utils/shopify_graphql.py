@@ -23,14 +23,18 @@ def graphql_call(
     variables: dict[str, Any] | None = None,
     *,
     timeout: int = 25,
+    api_version: str | None = None,
 ) -> dict[str, Any]:
     """Ejecuta una operation Admin GraphQL y devuelve ``data``.
 
     Lanza ``ValueError`` con el detalle si la respuesta tiene errores HTTP o
     ``errors`` GraphQL. Los ``userErrors`` por mutación los maneja el caller.
+
+    ``api_version`` permite apuntar a una tienda con versión distinta a la
+    global ``SHOPIFY_API_VERSION`` (p. ej. la tienda B2C).
     """
     shop = shop_domain.strip().lower()
-    ver = shopify_api_version()
+    ver = (api_version or "").strip() or shopify_api_version()
     url = f"https://{shop}/admin/api/{ver}/graphql.json"
     payload = json.dumps({"query": query, "variables": variables or {}}).encode(
         "utf-8"

@@ -97,6 +97,11 @@ class ShopifyOrder(Base, TimestampMixin, DictMixin):
         nullable=True,
         doc="Líneas del pedido (título, cantidad, SKU, precios) para listados/UI.",
     )
+    shipping_lines: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        doc="Líneas de envío (título, precio, código) sincronizadas desde Shopify.",
+    )
 
     company = relationship("Company", back_populates="shopify_orders")
     last_intervened_by_user = relationship(

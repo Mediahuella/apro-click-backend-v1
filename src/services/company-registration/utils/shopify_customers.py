@@ -125,6 +125,60 @@ mutation CompanyAssignCustomerAsContact($companyId: ID!, $customerId: ID!) {
 }
 """
 
+_MUTATION_COMPANY_CONTACT_ASSIGN_ROLE = """
+mutation CompanyContactAssignRole(
+  $companyContactId: ID!
+  $companyContactRoleId: ID!
+  $companyLocationId: ID!
+) {
+  companyContactAssignRole(
+    companyContactId: $companyContactId
+    companyContactRoleId: $companyContactRoleId
+    companyLocationId: $companyLocationId
+  ) {
+    companyContactRoleAssignment {
+      id
+      role { id name }
+      companyLocation { id name }
+    }
+    userErrors { field message code }
+  }
+}
+"""
+
+_QUERY_COMPANY_CONTACTS_WITH_ROLES = """
+query CompanyContactsWithRoles($id: ID!) {
+  company(id: $id) {
+    id
+    name
+    contactRoles(first: 5) {
+      nodes { id name }
+    }
+    locations(first: 10) {
+      edges { node { id name } }
+    }
+    contacts(first: 20) {
+      nodes {
+        id
+        customer {
+          id
+          defaultEmailAddress { emailAddress }
+        }
+        roleAssignments(first: 10) {
+          edges {
+            node {
+              id
+              role { id name }
+              companyLocation { id name }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 def _normalize_shop_domain(domain: str) -> str:
     d = domain.strip().lower()
@@ -731,6 +785,18 @@ mutation CatalogContextUpdate(
 """
 
 
+def _find_contact_gid_by_customer(
+    company_contacts: list[dict[str, Any]], customer_numeric: str
+) -> str | None:
+    """Busca el GID del CompanyContact cuyo customer.id coincide con customer_numeric."""
+    target = f"gid://shopify/Customer/{customer_numeric}"
+    for c in company_contacts:
+        c_id = ((c.get("customer") or {}).get("id") or "").strip()
+        if c_id == target:
+            return c.get("id")
+    return None
+
+
 def _extract_location_gids(comp: dict[str, Any]) -> list[str]:
     """Extrae los GIDs de CompanyLocation del dict `company` devuelto por companyCreate."""
     edges = (comp.get("locations") or {}).get("edges") or []
@@ -914,6 +980,117 @@ def assign_customer_as_contact(
         raise ShopifyAPIError(422, {"userErrors": errs, "message": "companyAssignCustomerAsContact"})
 
 
+_QUERY_COMPANY_ROLES = """
+query CompanyRoles($id: ID!) {
+  company(id: $id) {
+    contactRoles(first: 5) {
+      nodes { id name }
+    }
+  }
+}
+"""
+
+
+def get_company_ordering_role_gid(
+    shop_domain: str, access_token: str, company_gid: str
+) -> str | None:
+    """Devuelve el GID del rol ORDERING_ONLY (o LOCATION_ADMIN) de una company concreta.
+
+    Los roles en Shopify B2B son por-company: el mismo nombre de rol tiene un GID distinto
+    en cada empresa. Siempre consultar por la company destino, nunca reutilizar el GID de otra.
+    """
+    try:
+        data = _graphql_request(
+            shop_domain, access_token, _QUERY_COMPANY_ROLES, {"id": company_gid}
+        )
+    except ShopifyAPIError:
+        return None
+    nodes = (data.get("company") or {}).get("contactRoles", {}).get("nodes") or []
+    ordering_gid: str | None = None
+    location_admin_gid: str | None = None
+    for node in nodes:
+        name = (node.get("name") or "").lower()
+        gid = node.get("id") or ""
+        if not gid:
+            continue
+        if "ordering" in name:
+            ordering_gid = gid
+        elif "location" in name:
+            location_admin_gid = gid
+    return ordering_gid or location_admin_gid
+
+
+def assign_contact_ordering_role(
+    shop_domain: str,
+    access_token: str,
+    contact_gid: str,
+    location_gids: list[str],
+    *,
+    role_gid: str | None = None,
+    company_gid: str | None = None,
+) -> None:
+    """Asigna rol ORDERING_ONLY al CompanyContact en cada CompanyLocation indicada.
+
+    Sin este paso, el cliente puede ser mainContact pero no puede realizar pedidos B2B.
+    Los role GIDs son POR-COMPANY en Shopify: se debe pasar `company_gid` o `role_gid`
+    explícitamente. Si no se pasa ninguno, se lanza RuntimeError.
+    """
+    if not location_gids:
+        logger.warning(
+            "assign_contact_ordering_role: no se recibieron location_gids, "
+            "el cliente quedará sin rol de compra"
+        )
+        return
+
+    effective_role_gid = role_gid
+    if not effective_role_gid and company_gid:
+        effective_role_gid = get_company_ordering_role_gid(shop_domain, access_token, company_gid)
+
+    if not effective_role_gid:
+        raise RuntimeError(
+            "assign_contact_ordering_role: role GID no disponible — pasar company_gid= "
+            "o role_gid= explícitamente (los roles son por-company en Shopify B2B)"
+        )
+
+    for loc_gid in location_gids:
+        data = _graphql_request(
+            shop_domain,
+            access_token,
+            _MUTATION_COMPANY_CONTACT_ASSIGN_ROLE,
+            {
+                "companyContactId": contact_gid,
+                "companyContactRoleId": effective_role_gid,
+                "companyLocationId": loc_gid,
+            },
+        )
+        payload = data.get("companyContactAssignRole") or {}
+        errs = payload.get("userErrors") or []
+        if errs:
+            raise ShopifyAPIError(
+                422,
+                {"userErrors": errs, "message": f"companyContactAssignRole en {loc_gid}"},
+            )
+
+
+def get_company_contacts_with_roles(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+) -> dict[str, Any] | None:
+    """Devuelve contactRoles + locations + contacts con sus roleAssignments, o None."""
+    data = _graphql_request(
+        shop_domain, access_token, _QUERY_COMPANY_CONTACTS_WITH_ROLES, {"id": company_gid}
+    )
+    node = data.get("company")
+    if not isinstance(node, dict):
+        return None
+    contact_roles = (node.get("contactRoles") or {}).get("nodes") or []
+    location_edges = (node.get("locations") or {}).get("edges") or []
+    locations = [e.get("node") for e in location_edges if isinstance(e.get("node"), dict)]
+    contacts = (node.get("contacts") or {}).get("nodes") or []
+    return {"contactRoles": contact_roles, "locations": locations, "contacts": contacts}
+
+
 def ensure_shopify_b2b_company(
     shop_domain: str,
     access_token: str,
@@ -997,12 +1174,33 @@ def ensure_shopify_b2b_company(
             .get("companyContact", {})
             .get("id")
         )
-        if contact_gid:
-            set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
+        if not contact_gid:
+            # Shopify a veces devuelve companyContact: null (p. ej. si el cliente ya era
+            # contacto). Consultamos los contactos actuales de la company para obtener el GID.
+            info = get_company_contact_info(shop_domain, access_token, str(company_gid))
+            if info:
+                contact_gid = _find_contact_gid_by_customer(
+                    info.get("contacts") or [], existing_numeric
+                )
+        if not contact_gid:
+            raise ShopifyAPIError(
+                422,
+                {
+                    "message": (
+                        "No se pudo determinar el CompanyContact para asignar mainContact; "
+                        "el cliente no tendría permiso de compra B2B."
+                    )
+                },
+            )
+        set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
 
-        return _shopify_b2b_ids(
-            existing_numeric, str(company_gid), _extract_location_gids(comp)
+        loc_gids_existing = _extract_location_gids(comp)
+        assign_contact_ordering_role(
+            shop_domain, access_token, contact_gid, loc_gids_existing,
+            company_gid=str(company_gid),
         )
+
+        return _shopify_b2b_ids(existing_numeric, str(company_gid), loc_gids_existing)
 
     fn = (first_name or "").strip()
     ln = (last_name or "").strip()
@@ -1075,8 +1273,27 @@ def ensure_shopify_b2b_company(
             .get("companyContact", {})
             .get("id")
         )
-        if contact_gid:
-            set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
+        if not contact_gid:
+            info = get_company_contact_info(shop_domain, access_token, str(company_gid))
+            if info:
+                contact_gid = _find_contact_gid_by_customer(
+                    info.get("contacts") or [], existing2
+                )
+        if not contact_gid:
+            raise ShopifyAPIError(
+                422,
+                {
+                    "message": (
+                        "No se pudo determinar el CompanyContact (fallback) para asignar "
+                        "mainContact; el cliente no tendría permiso de compra B2B."
+                    )
+                },
+            )
+        set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
+        assign_contact_ordering_role(
+            shop_domain, access_token, contact_gid, loc_gids,
+            company_gid=str(company_gid),
+        )
         return _shopify_b2b_ids(existing2, str(company_gid), loc_gids)
 
     raise ShopifyAPIError(

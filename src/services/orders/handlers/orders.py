@@ -35,6 +35,7 @@ for path in possible_shared_paths:
 
 from services.order_service import (  # noqa: E402
     apply_order_updates,
+    fulfill_order,
     get_line_item_featured_images_for_order,
     get_order_for_user,
     list_orders_for_user,
@@ -203,6 +204,37 @@ def send_invoice(order_id: str):
     except Exception:
         logger.exception("Error enviando invoice del pedido")
         raise InternalServerError("Error enviando invoice del pedido")
+
+
+@app.post("/api/v1/orders/<order_id>/fulfill")
+@tracer.capture_method
+def fulfill(order_id: str):
+    """Prepara el pedido: crea un fulfillment en Shopify para todos los FulfillmentOrders abiertos."""
+    try:
+        user = _require_reader()
+        if user.get("role") not in INTERVENTION_ROLES:
+            raise ForbiddenError("Sin permiso para preparar el pedido")
+        body = app.current_event.json_body
+        notify_customer = False
+        if isinstance(body, dict):
+            nc = body.get("notify_customer")
+            if isinstance(nc, bool):
+                notify_customer = nc
+        data = fulfill_order(user, order_id, notify_customer=notify_customer)
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except LookupError as e:
+        raise NotFoundError(str(e))
+    except PermissionError as e:
+        raise ForbiddenError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except UnauthorizedError:
+        raise
+    except ForbiddenError:
+        raise
+    except Exception:
+        logger.exception("Error preparando pedido")
+        raise InternalServerError("Error preparando pedido")
 
 
 def lambda_handler(event: dict, context: LambdaContext):

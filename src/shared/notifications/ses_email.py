@@ -184,15 +184,9 @@ def notify_approval(
       </h1>
       <p style="margin:0 0 14px 0;">Hola {contact_name},</p>
       <p style="margin:0 0 14px 0;">
-        Nos complace informarte que la solicitud de la empresa
-        <b style="color:{BRAND_DARK};">{company_name}</b> ha sido <b>aprobada</b>.
-      </p>
-      <p style="margin:0 0 8px 0;">
-        Ya puedes acceder a la tienda con tu cuenta y ver los precios
-        y condiciones B2B disponibles para tu empresa.
-      </p>
-      <p style="margin:18px 0 0 0;color:{TEXT_MUTED};font-size:13px;">
-        Si tienes dudas, responde este correo y con gusto te ayudamos.
+        Tu cuenta en Apro Click está <b>habilitada</b>. Ya puedes ingresar a la tienda
+        y acceder a los precios y condiciones B2B disponibles para
+        <b style="color:{BRAND_DARK};">{company_name}</b>.
       </p>
     """
     html = _layout(
@@ -239,4 +233,152 @@ def notify_rejection(
       </p>
     """
     html = _layout(preheader=preheader, content_html=content)
+    _enviar([contact_email], subject, html)
+
+
+def notify_confirmacion_solicitud(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    quote_id: str,
+    lines: list[dict],
+) -> None:
+    """Notifica al cliente que su solicitud de cotización fue recibida."""
+    if not contact_email:
+        return
+    subject = f"Recibimos tu solicitud de cotización — Apro Click"
+    preheader = f"Tu solicitud de cotización para {company_name} fue recibida correctamente."
+    filas = ""
+    for ln in (lines or [])[:20]:
+        titulo = ln.get("title") or ln.get("sku") or "-"
+        qty = ln.get("quantity") or 1
+        filas += f"""
+        <tr>
+          <td style="padding:6px 8px;border-bottom:1px solid {BORDER};font-size:13px;">{titulo}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid {BORDER};font-size:13px;text-align:center;">{qty}</td>
+        </tr>
+        """
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        Recibimos tu solicitud
+      </h1>
+      <p style="margin:0 0 14px 0;">Hola {contact_name or ''},</p>
+      <p style="margin:0 0 14px 0;">
+        Recibimos tu solicitud de cotización para <b style="color:{BRAND_DARK};">{company_name}</b>.
+        Nuestro equipo la revisará y te enviaremos la cotización formal con los precios a la brevedad.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;margin:16px 0;">
+        <tr>
+          <th style="padding:8px 8px;text-align:left;color:{TEXT_MUTED};font-size:12px;font-weight:600;
+                     border-bottom:1px solid {BORDER};">PRODUCTO</th>
+          <th style="padding:8px 8px;text-align:center;color:{TEXT_MUTED};font-size:12px;font-weight:600;
+                     border-bottom:1px solid {BORDER};">CANT.</th>
+        </tr>
+        {filas}
+      </table>
+      <p style="margin:18px 0 0 0;color:{TEXT_MUTED};font-size:13px;">
+        Si tienes alguna consulta, responde este correo y con gusto te ayudamos.
+      </p>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Ver mis cotizaciones", "https://www.aproclick.cl"),
+    )
+    _enviar([contact_email], subject, html)
+
+
+def notify_nueva_cotizacion(
+    admin_emails: list[str],
+    company_name: str,
+    quote_id: str,
+    line_count: int,
+    contact_name: str | None = None,
+    contact_email: str | None = None,
+) -> None:
+    """Notifica a SALES/admins que llegó una nueva solicitud de cotización."""
+    if not admin_emails:
+        return
+    subject = f"Nueva solicitud de cotización: {company_name}"
+    preheader = f"{company_name} solicitó una cotización ({line_count} productos)."
+    contacto = ""
+    if contact_name or contact_email:
+        contacto = f"""
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Contacto</td>
+            <td style="padding:6px 4px;">{contact_name or '-'}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Email</td>
+            <td style="padding:6px 4px;">{contact_email or '-'}</td></tr>
+        """
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        Nueva solicitud de cotización
+      </h1>
+      <p style="margin:0 0 20px 0;color:{TEXT_MUTED};">
+        Una empresa solicitó una cotización y está esperando revisión de precios.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px;">
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Empresa</td>
+            <td style="padding:6px 4px;font-weight:600;">{company_name}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Productos</td>
+            <td style="padding:6px 4px;font-weight:600;">{line_count}</td></tr>
+        {contacto}
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">ID</td>
+            <td style="padding:6px 4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;">
+              {quote_id}
+            </td></tr>
+      </table>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Revisar en el panel", f"{ADMIN_PANEL_URL}/quotes"),
+    )
+    _enviar(admin_emails, subject, html)
+
+
+def notify_cotizacion_lista(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    folio: str,
+    pdf_url: str,
+    total: str | None = None,
+) -> None:
+    """Notifica al cliente que su cotización está lista, con link de descarga del PDF."""
+    if not contact_email:
+        return
+    subject = f"Tu cotización {folio} está lista — Apro Click"
+    preheader = f"Cotización {folio} para {company_name} disponible para descargar."
+    total_block = ""
+    if total:
+        total_block = f"""
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Total</td>
+            <td style="padding:6px 4px;font-weight:600;">{total}</td></tr>
+        """
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        Tu cotización está lista
+      </h1>
+      <p style="margin:0 0 14px 0;">Hola {contact_name or ''},</p>
+      <p style="margin:0 0 14px 0;">
+        Preparamos la cotización <b style="color:{BRAND_DARK};">{folio}</b> para
+        <b>{company_name}</b>. Puedes descargarla en PDF con el botón de abajo.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px;">
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Folio</td>
+            <td style="padding:6px 4px;font-weight:600;">{folio}</td></tr>
+        {total_block}
+      </table>
+      <p style="margin:18px 0 0 0;color:{TEXT_MUTED};font-size:13px;">
+        Esta cotización tiene una validez limitada. Haz referencia al folio en tu orden de compra.
+      </p>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Descargar cotización (PDF)", pdf_url),
+    )
     _enviar([contact_email], subject, html)

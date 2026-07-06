@@ -11,7 +11,12 @@ from database.models.conversation import Conversation
 from database.models.message import Message
 from database.models.shopify import ShopifyAppInstallation
 from database.models.shopify_order import ShopifyOrder
-from database.models.price_list import PriceListUpload, ShopifyPriceSegment
+from database.models.price_list import (
+    B2cPriceUpload,
+    PriceListUpload,
+    ShopifyPriceSegment,
+)
+from database.models.quote_request import QuoteRequest, QuoteRequestLine
 
 __all__ = [
     "Company",
@@ -27,4 +32,7 @@ __all__ = [
     "ShopifyOrder",
     "PriceListUpload",
     "ShopifyPriceSegment",
+    "B2cPriceUpload",
+    "QuoteRequest",
+    "QuoteRequestLine",
 ]

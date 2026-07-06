@@ -87,3 +87,67 @@ def encolar_rechazo(
             "reason": reason,
         },
     )
+
+
+def encolar_nueva_cotizacion(
+    admin_emails: list[str],
+    company_name: str,
+    quote_id: str,
+    line_count: int,
+    contact_name: str | None = None,
+    contact_email: str | None = None,
+) -> None:
+    """Encola aviso a SALES/admins de una nueva solicitud de cotización."""
+    _encolar(
+        "nueva_cotizacion",
+        {
+            "admin_emails": admin_emails,
+            "company_name": company_name,
+            "quote_id": quote_id,
+            "line_count": line_count,
+            "contact_name": contact_name,
+            "contact_email": contact_email,
+        },
+    )
+
+
+def encolar_confirmacion_solicitud(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    quote_id: str,
+    lines: list[dict],
+) -> None:
+    """Encola confirmación al cliente de que su solicitud de cotización fue recibida."""
+    _encolar(
+        "confirmacion_solicitud",
+        {
+            "contact_email": contact_email,
+            "contact_name": contact_name,
+            "company_name": company_name,
+            "quote_id": quote_id,
+            "lines": lines,
+        },
+    )
+
+
+def encolar_cotizacion_lista(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    folio: str,
+    pdf_url: str,
+    total: str | None = None,
+) -> None:
+    """Encola aviso al cliente de que su cotización está lista (con link al PDF)."""
+    _encolar(
+        "cotizacion_lista",
+        {
+            "contact_email": contact_email,
+            "contact_name": contact_name,
+            "company_name": company_name,
+            "folio": folio,
+            "pdf_url": pdf_url,
+            "total": total,
+        },
+    )

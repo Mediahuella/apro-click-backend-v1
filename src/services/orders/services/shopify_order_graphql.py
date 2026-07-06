@@ -138,6 +138,30 @@ mutation orderInvoiceSend($id: ID!, $email: EmailInput) {
 }
 """
 
+_FULFILLMENT_ORDERS_QUERY = """
+query pedidoFulfillmentOrders($id: ID!) {
+  order(id: $id) {
+    fulfillmentOrders(first: 20) {
+      edges {
+        node {
+          id
+          status
+        }
+      }
+    }
+  }
+}
+"""
+
+_FULFILLMENT_CREATE = """
+mutation crearFulfillment($fulfillment: FulfillmentV2Input!) {
+  fulfillmentCreateV2(fulfillment: $fulfillment) {
+    fulfillment { id status }
+    userErrors { field message }
+  }
+}
+"""
+
 
 def send_order_invoice_via_shopify(
     shop_domain: str,
@@ -451,6 +475,63 @@ def apply_order_edits_via_shopify(
     except Exception:
         # Sin mutación de abandon portable entre versiones; la sesión caduca en Shopify.
         raise
+
+
+def fulfill_all_pending(
+    shop_domain: str,
+    access_token: str,
+    shopify_order_id: str,
+    *,
+    notify_customer: bool = False,
+) -> None:
+    """Crea un fulfillment por cada FulfillmentOrder abierto del pedido.
+
+    Lanza ``ValueError`` si Shopify retorna userErrors o si no hay órdenes
+    de fulfillment abiertas.
+    """
+    oid = str(shopify_order_id).strip()
+    if not oid:
+        raise ValueError("shopify_order_id vacío")
+    order_gid = f"gid://shopify/Order/{oid}"
+
+    data = _graphql(shop_domain, access_token, _FULFILLMENT_ORDERS_QUERY, {"id": order_gid})
+    order_node = data.get("order") or {}
+    fo_conn = order_node.get("fulfillmentOrders") or {}
+    edges = fo_conn.get("edges") or []
+
+    open_ids = [
+        e["node"]["id"]
+        for e in edges
+        if isinstance(e, dict)
+        and isinstance(e.get("node"), dict)
+        and e["node"].get("status") in ("OPEN", "IN_PROGRESS", "SCHEDULED")
+    ]
+
+    if not open_ids:
+        raise ValueError(
+            "El pedido no tiene órdenes de fulfillment pendientes (ya está preparado o no aplica)"
+        )
+
+    errors: list[str] = []
+    for fo_id in open_ids:
+        result = _graphql(
+            shop_domain,
+            access_token,
+            _FULFILLMENT_CREATE,
+            {
+                "fulfillment": {
+                    "lineItemsByFulfillmentOrder": [{"fulfillmentOrderId": fo_id}],
+                    "notifyCustomer": notify_customer,
+                }
+            },
+        )
+        payload = result.get("fulfillmentCreateV2") or {}
+        uerr = payload.get("userErrors") or []
+        if uerr:
+            errors.append(_format_user_errors(uerr))
+
+    if errors:
+        raise ValueError("; ".join(errors))
 
 
 def fetch_order_rest(

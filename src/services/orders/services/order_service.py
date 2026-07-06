@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
+from aws_lambda_powertools import Logger
 from sqlalchemy import and_, desc, select
 from sqlalchemy.orm import Session
+
+logger = Logger()
+
 service_root = Path(__file__).resolve().parent.parent
 if str(service_root) not in sys.path:
     sys.path.insert(0, str(service_root))
@@ -32,6 +36,7 @@ for path in possible_shared_paths:
 
 from database.engine import get_session  # noqa: E402
 from database.models.company import Company  # noqa: E402
+from database.models.quote_request import QuoteRequest  # noqa: E402
 from database.models.shopify import ShopifyAppInstallation  # noqa: E402
 from database.models.shopify_order import ShopifyOrder  # noqa: E402
 
@@ -113,6 +118,27 @@ def _line_items_for_storage(order: dict[str, Any]) -> list[dict[str, Any]]:
                 if li.get("total_discount") is not None
                 else None,
                 "vendor": li.get("vendor"),
+            }
+        )
+    return out
+
+
+def _shipping_lines_for_storage(order: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = order.get("shipping_lines")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for sl in raw:
+        if not isinstance(sl, dict):
+            continue
+        out.append(
+            {
+                "title": (sl.get("title") or "")[:255],
+                "price": str(sl.get("price")) if sl.get("price") is not None else None,
+                "code": (sl.get("code") or None),
+                "discounted_price": str(sl.get("discounted_price"))
+                if sl.get("discounted_price") is not None
+                else None,
             }
         )
     return out
@@ -201,6 +227,54 @@ def _resolve_order_crm_company_id(
     return None
 
 
+def _close_quote_for_order(
+    session: Any,
+    *,
+    shopify_order_id: str,
+    company_id: uuid.UUID | None,
+    order: dict[str, Any],
+) -> None:
+    """Cierra (``ACEPTADA``) la ``QuoteRequest`` asociada al pedido recién creado.
+
+    Matchea por:
+    1. ``order_gid`` ya persistido (camino ``draftOrderComplete`` / net terms).
+    2. Referencia al draft en el payload (camino invoice → pago): la order creada
+       desde un draft incluye su id; se compara contra ``draft_order_gid``.
+    Non-blocking: cualquier error se ignora (no debe romper el upsert del pedido).
+    """
+    try:
+        order_gid = f"gid://shopify/Order/{shopify_order_id}"
+        quote = session.scalar(
+            select(QuoteRequest).where(QuoteRequest.order_gid == order_gid)
+        )
+        if quote is None:
+            raw_draft = order.get("draft_order_id") or order.get("draftOrderId")
+            nested = order.get("draft_order")
+            if not raw_draft and isinstance(nested, dict):
+                raw_draft = nested.get("id")
+            if raw_draft:
+                draft_gid = (
+                    str(raw_draft)
+                    if str(raw_draft).startswith("gid://")
+                    else f"gid://shopify/DraftOrder/{raw_draft}"
+                )
+                quote = session.scalar(
+                    select(QuoteRequest).where(
+                        QuoteRequest.draft_order_gid == draft_gid
+                    )
+                )
+        if quote is None:
+            return
+        quote.order_gid = order_gid
+        if quote.status not in ("ACEPTADA",):
+            quote.status = "ACEPTADA"
+    except Exception:  # noqa: BLE001 — cierre best-effort
+        logger.exception(
+            "No se pudo cerrar la cotización asociada al pedido",
+            extra={"shopify_order_id": shopify_order_id},
+        )
+
+
 def upsert_from_shopify_payload(
     shop_domain: str, order: dict[str, Any]
 ) -> dict[str, Any]:
@@ -210,6 +284,7 @@ def upsert_from_shopify_payload(
     shopify_order_id = _coerce_shopify_order_id(order["id"])
     soid_str = (order.get("name") or "").strip() or f"#{shopify_order_id}"
     lines = _line_items_for_storage(order)
+    shipping = _shipping_lines_for_storage(order)
     fin = order.get("financial_status")
     fin_s = fin if isinstance(fin, str) else None
     internal = internal_status_from_financial(fin_s)
@@ -271,6 +346,14 @@ def upsert_from_shopify_payload(
         if company_id:
             row.company_id = company_id
         row.line_items = lines
+        row.shipping_lines = shipping if shipping else None
+        # Cierre del ciclo de cotización (best-effort) si el pedido viene de un draft.
+        _close_quote_for_order(
+            session,
+            shopify_order_id=shopify_order_id,
+            company_id=company_id,
+            order=order,
+        )
         session.flush()
         out = row.to_dict()
         session.commit()
@@ -547,6 +630,66 @@ def send_order_invoice(
         shopify_oid,
         email=email,
     )
+
+    with get_session() as session:
+        row3 = get_order_by_id(session, order_id)
+        if row3:
+            row3.last_intervened_by_user_id = uid
+            session.commit()
+
+    out = get_order_for_user(user, order_id)
+    if not out:
+        raise LookupError("Pedido no encontrado")
+    return out
+
+
+def fulfill_order(
+    user: dict[str, Any],
+    order_id: str,
+    *,
+    notify_customer: bool = False,
+) -> dict[str, Any]:
+    """Prepara el pedido creando un fulfillment en Shopify para todos los FulfillmentOrders abiertos."""
+    from services.shopify_order_graphql import (  # noqa: WPS433
+        fetch_order_rest,
+        fulfill_all_pending,
+    )
+    from utils.cognito_order_access import (  # noqa: WPS433
+        can_shopify_edit_order,
+        get_order_by_id,
+    )
+
+    uid = uuid.UUID(user["id"])
+    shop_domain: str
+    shopify_oid: str
+
+    with get_session() as session:
+        row: ShopifyOrder | None = get_order_by_id(session, order_id)
+        if not row:
+            raise LookupError("Pedido no encontrado")
+        if not can_shopify_edit_order(user, row):
+            raise PermissionError("Sin permiso para preparar este pedido")
+        if row.fulfillment_status == "fulfilled":
+            raise ValueError("El pedido ya está completamente preparado")
+        shop_domain = row.shop_domain
+        shopify_oid = row.shopify_order_id
+
+    with get_session() as session:
+        inst = session.scalar(
+            select(ShopifyAppInstallation).where(
+                ShopifyAppInstallation.shop_domain == shop_domain
+            )
+        )
+        token = (inst.shopify_access_token if inst else None) or ""
+    if not str(token).strip():
+        raise ValueError(
+            "La tienda no tiene token OAuth; conecta Shopify en el admin"
+        )
+
+    tok = str(token).strip()
+    fulfill_all_pending(shop_domain, tok, shopify_oid, notify_customer=notify_customer)
+    fresh = fetch_order_rest(shop_domain, tok, shopify_oid)
+    upsert_from_shopify_payload(shop_domain, fresh)
 
     with get_session() as session:
         row3 = get_order_by_id(session, order_id)

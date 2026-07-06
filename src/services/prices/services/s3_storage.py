@@ -26,15 +26,20 @@ def uploads_bucket() -> str:
     return name
 
 
-def build_object_key(upload_id: str, *, filename: str | None) -> str:
+def build_object_key(
+    upload_id: str, *, filename: str | None, prefix: str = ""
+) -> str:
     """Convención del path en S3.
 
-    ``YYYY/MM/<upload_id>/<filename or excel.xlsx>``. El upload_id va incluido
-    para no colisionar y para hacer fácil el clean-up manual si hace falta.
+    ``[<prefix>/]YYYY/MM/<upload_id>/<filename or excel.xlsx>``. El upload_id va
+    incluido para no colisionar y para hacer fácil el clean-up manual si hace
+    falta. ``prefix`` separa flujos en el mismo bucket (p. ej. ``b2c``).
     """
     now = datetime.now(timezone.utc)
     safe_name = (filename or "").strip().replace("/", "_") or "lista.xlsx"
-    return f"{now:%Y/%m}/{upload_id}/{safe_name}"
+    pre = (prefix or "").strip().strip("/")
+    base = f"{now:%Y/%m}/{upload_id}/{safe_name}"
+    return f"{pre}/{base}" if pre else base
 
 
 def put_excel(
@@ -42,6 +47,7 @@ def put_excel(
     *,
     file_bytes: bytes,
     filename: str | None,
+    prefix: str = "",
     content_type: str = (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ),
@@ -52,7 +58,7 @@ def put_excel(
     configurado o si la llamada a S3 falla.
     """
     bucket = uploads_bucket()
-    key = build_object_key(upload_id, filename=filename)
+    key = build_object_key(upload_id, filename=filename, prefix=prefix)
     metadata = {"upload-id": upload_id}
     if filename:
         metadata["original-filename"] = filename[:200]

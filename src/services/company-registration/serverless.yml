@@ -30,6 +30,9 @@ provider:
     COMPANY_REGISTRATION_API_KEY: ${env:COMPANY_REGISTRATION_API_KEY, ''}
     # Admin API GraphQL (/admin/api/<version>/graphql.json) — write_customers + read_customers
     SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
+    # APRO IA (DMS externo) — API de clientes (host distinto al de `quotes`, mismo token Bearer).
+    APRO_IA_CLIENTS_BASE_URL: ${env:APRO_IA_CLIENTS_BASE_URL, ''}
+    APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
     # Cola SQS del servicio notifications para envío de emails
     NOTIFICATIONS_QUEUE_URL:
       Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-url
