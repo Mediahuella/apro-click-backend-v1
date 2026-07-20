@@ -382,3 +382,48 @@ def notify_cotizacion_lista(
         cta=("Descargar cotización (PDF)", pdf_url),
     )
     _enviar([contact_email], subject, html)
+
+
+def notify_cotizacion_apro_ia_estado(
+    admin_emails: list[str],
+    company_name: str,
+    folio: str,
+    quote_id: str,
+    event: str,
+    status: str,
+) -> None:
+    """Notifica a SALES/admins que APRO IA autorizó o rechazó una cotización."""
+    if not admin_emails:
+        return
+    aprobada = event == "quotation.approved"
+    subject = (
+        f"Cotización {folio} autorizada por APRO IA"
+        if aprobada
+        else f"Cotización {folio} rechazada por APRO IA"
+    )
+    preheader = f"{company_name} — {folio}: {status}"
+    accent = "#1a7f37" if aprobada else "#b42318"
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        {'Cotización autorizada' if aprobada else 'Cotización rechazada'} en APRO IA
+      </h1>
+      <p style="margin:0 0 20px 0;color:{TEXT_MUTED};">
+        El Gerente Comercial {'autorizó' if aprobada else 'rechazó'} esta cotización en el
+        DMS de APRO IA.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px;">
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Empresa</td>
+            <td style="padding:6px 4px;font-weight:600;">{company_name}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Folio</td>
+            <td style="padding:6px 4px;font-weight:600;">{folio}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Estado APRO IA</td>
+            <td style="padding:6px 4px;font-weight:600;color:{accent};">{status}</td></tr>
+      </table>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Revisar en el panel", f"{ADMIN_PANEL_URL}/quotes/{quote_id}"),
+    )
+    _enviar(admin_emails, subject, html)

@@ -78,6 +78,29 @@ def login():
         raise InternalServerError("Error during login")
 
 
+@app.post("/api/v1/auth/refresh")
+@tracer.capture_method
+def refresh():
+    try:
+        body = app.current_event.json_body or {}
+        refresh_token = body.get("refresh_token")
+
+        if not refresh_token:
+            raise BadRequestError("'refresh_token' is required")
+
+        result = auth_service.refresh_session(refresh_token)
+        return {"statusCode": 200, "message": "Session refreshed", "data": result}
+
+    except BadRequestError:
+        raise
+    except Exception as e:
+        error_code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if error_code in ("NotAuthorizedException", "UserNotFoundException"):
+            raise UnauthorizedError("Refresh token inválido o expirado")
+        logger.exception("Error refreshing session")
+        raise InternalServerError("Error refreshing session")
+
+
 @app.post("/api/v1/auth/change-password")
 @tracer.capture_method
 def change_first_time_password():

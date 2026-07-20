@@ -2,6 +2,9 @@
 
 - ``require_quotes_api_key``: el ``POST`` público y los GET storefront exigen el
   header ``X-Api-Key`` si ``QUOTES_PUBLIC_API_KEY`` está configurada.
+- ``require_apro_ia_webhook_key``: el webhook de eventos de APRO IA exige el
+  header ``x-api-key`` con la clave propia del webhook (distinta de la del
+  storefront) si ``APRO_IA_WEBHOOK_API_KEY`` está configurada.
 - ``sign_pdf_token`` / ``verify_pdf_token``: HMAC sobre el ``quote_id`` para el
   link de descarga del PDF que va por email (acceso sin login).
 """
@@ -12,15 +15,38 @@ import hmac
 import os
 
 
+def _get_header(headers: dict[str, str] | None, name: str) -> str | None:
+    h = headers or {}
+    lname = name.lower()
+    for k, v in h.items():
+        if str(k).lower() == lname:
+            return v
+    return None
+
+
 def require_quotes_api_key(headers: dict[str, str] | None) -> None:
     """Si ``QUOTES_PUBLIC_API_KEY`` está vacía en la Lambda, no se exige header."""
     expected = (os.environ.get("QUOTES_PUBLIC_API_KEY") or "").strip()
     if not expected:
         return
-    h = headers or {}
-    got = h.get("x-api-key") or h.get("X-Api-Key") or h.get("x-Api-Key")
+    got = _get_header(headers, "x-api-key")
     if not got or got.strip() != expected:
         raise PermissionError("API key inválida o ausente (use header X-Api-Key)")
+
+
+def require_apro_ia_webhook_key(headers: dict[str, str] | None) -> None:
+    """Valida el header ``x-api-key`` del webhook de eventos de APRO IA.
+
+    Si ``APRO_IA_WEBHOOK_API_KEY`` no está configurada, se rechaza siempre —
+    a diferencia del canal storefront, este endpoint recibe datos de un
+    sistema externo y no debe quedar abierto por omisión.
+    """
+    expected = (os.environ.get("APRO_IA_WEBHOOK_API_KEY") or "").strip()
+    if not expected:
+        raise PermissionError("APRO_IA_WEBHOOK_API_KEY no está configurado")
+    got = _get_header(headers, "x-api-key")
+    if not got or got.strip() != expected:
+        raise PermissionError("API key inválida o ausente (use header x-api-key)")
 
 
 def _link_secret() -> str:

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 from decimal import Decimal, InvalidOperation
@@ -45,9 +46,11 @@ from database.models.quote_request import (  # noqa: E402
     QuoteRequestLine,
 )
 from database.models.user import User  # noqa: E402
+from database.models.user_company import UserCompany  # noqa: E402
 from shopify.store import resolve_store_token  # noqa: E402
 from notifications.sqs_publisher import (  # noqa: E402
     encolar_confirmacion_solicitud,
+    encolar_cotizacion_apro_ia_estado,
     encolar_cotizacion_lista,
     encolar_nueva_cotizacion,
 )
@@ -339,6 +342,450 @@ def get_quote(
 
 
 # ---------------------------------------------------------------------------
+# Webhook APRO IA — sync de estado (ver docs/Webhook eventos.md)
+# ---------------------------------------------------------------------------
+APRO_IA_WEBHOOK_EVENTS = (
+    "quotation.created",
+    "quotation.updated",
+    "quotation.approved",
+    "quotation.rejected",
+)
+
+
+def _normalize_rut(value: str | None) -> str:
+    """Deja solo dígitos y el dígito verificador ``K`` (sin puntos ni guión).
+
+    APRO IA envía el RUT del webhook sin separadores (``762175053``) mientras
+    que ``Company.billing_rut`` se guarda con guión (``76217505-3``) — sin
+    normalizar, una comparación exacta no matchea aunque la empresa exista
+    (caso real detectado: folio CO-076039).
+    """
+    return re.sub(r"[^0-9kK]", "", value or "").upper()
+
+
+def _find_company_by_rut(session: Session, rut: str) -> Company | None:
+    normalized = _normalize_rut(rut)
+    if not normalized:
+        return None
+    for company in session.scalars(
+        select(Company).where(Company.billing_rut.isnot(None))
+    ).all():
+        if _normalize_rut(company.billing_rut) == normalized:
+            return company
+    return None
+
+
+def _unique_own_folio(session: Session, folio: str, apro_ia_id: str) -> str:
+    """El folio de APRO IA no es único entre cotizaciones (caso real: folio
+    ``AC-000007`` reusado por dos cotizaciones de clientes distintos), pero
+    nuestro ``QuoteRequest.folio`` sí tiene constraint ``unique`` — si el
+    folio de APRO IA ya está tomado por otra cotización, se desambigua con
+    un sufijo del ``apro_ia_id`` para no romper el insert.
+    """
+    taken = session.scalars(
+        select(QuoteRequest.id).where(QuoteRequest.folio == folio)
+    ).first()
+    if not taken:
+        return folio
+    suffix = (apro_ia_id or uuid.uuid4().hex)[-6:]
+    return f"{folio}-{suffix}"
+
+
+def _create_quote_from_apro_ia_payload(
+    session: Session,
+    payload: dict[str, Any],
+    *,
+    folio: str,
+    apro_ia_id: str,
+    status: str,
+) -> QuoteRequest | None:
+    """Crea una ``QuoteRequest`` para una cotización originada directamente en
+    APRO IA (``quotation.created`` sin contraparte en nuestra BD).
+
+    Reglas:
+
+    - La empresa debe existir en nuestro sistema (``Company.billing_rut`` vs
+      ``client.rut``, comparados normalizados — ver ``_normalize_rut``) y
+      tener ``shopify_company_id`` — sin eso no se puede resolver la
+      CompanyLocation/contacto que exige Shopify para el Draft Order B2B. Si
+      no existe, se omite la creación y se avisa a los admins para revisión
+      manual (no se inventa una empresa).
+    - Cada producto se resuelve por SKU contra el catálogo de Shopify
+      (``resolve_variant_by_sku``); los SKU que no matchean se descartan con
+      un warning en vez de abortar toda la cotización.
+    - El folio y el ``id`` los define APRO IA (ya es la fuente de verdad de
+      esta cotización) — no se genera folio propio ni se vuelve a crear la
+      cotización del lado de APRO IA (ya existe allá).
+    - Fecha: APRO IA no incluye una fecha de emisión en el payload del
+      webhook; se usa ``created_at`` (server default) como fecha de ingreso
+      a Apro Click y ``validity_days`` por defecto (14) para la vigencia.
+    - Si la empresa y los SKUs resuelven, se intenta crear el Draft Order de
+      inmediato para que el cliente pueda seguir el flujo de venta
+      (``negotiate_draft`` desde el panel sirve de reintento manual si esto
+      falla — no vuelve a golpear APRO IA, solo Shopify).
+    """
+    client = payload.get("client") or {}
+    client_rut = str(client.get("rut") or "").strip()
+    client_name = str(client.get("name") or "").strip()
+    products = payload.get("products") or []
+
+    if not client_rut or not isinstance(products, list) or not products:
+        logger.warning(
+            "Webhook APRO IA quotation.created: payload sin client.rut o "
+            "products — no se puede crear la cotización",
+            extra={"folio": folio, "apro_ia_id": apro_ia_id},
+        )
+        return None
+
+    company = _find_company_by_rut(session, client_rut)
+    if not company or not company.shopify_company_id:
+        logger.warning(
+            "Webhook APRO IA quotation.created: empresa no encontrada (o sin "
+            "Shopify Company) para el RUT del cliente — se omite creación "
+            "automática, requiere alta manual de la empresa",
+            extra={"folio": folio, "apro_ia_id": apro_ia_id, "rut": client_rut},
+        )
+        encolar_cotizacion_apro_ia_estado(
+            admin_emails=_admin_emails(session, None),
+            company_name=client_name or client_rut,
+            folio=folio,
+            quote_id="",
+            event="quotation.created",
+            status=(
+                f"{status or 'Pendiente'} — empresa RUT {client_rut} no existe en "
+                "Apro Click, no se pudo crear el Draft Order automáticamente"
+            ),
+        )
+        return None
+
+    try:
+        shop_domain, token = resolve_store_token(session)
+    except Exception:
+        logger.exception(
+            "Webhook APRO IA quotation.created: no se pudo resolver la tienda "
+            "Shopify activa",
+            extra={"folio": folio},
+        )
+        return None
+
+    quote = QuoteRequest(
+        company_id=company.id,
+        shopify_company_id=company.shopify_company_id,
+        shop_domain=shop_domain,
+        requested_by_name=client_name or company.name,
+        comment=(str(payload.get("comment") or "").strip() or None),
+        status="SOLICITADA",
+        apro_ia_id=apro_ia_id or None,
+        apro_ia_folio=folio or None,
+        apro_ia_status=status or None,
+        folio=_unique_own_folio(session, folio, apro_ia_id) if folio else None,
+    )
+    line_no = 1
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+        sku = str(p.get("sku") or "").strip()
+        if not sku:
+            continue
+        variant = draft_order_service.resolve_variant_by_sku(shop_domain, token, sku)
+        if not variant:
+            logger.warning(
+                "Webhook APRO IA quotation.created: SKU no encontrado en "
+                "Shopify — se omite la línea",
+                extra={"folio": folio, "sku": sku},
+            )
+            continue
+        title = (
+            variant.get("displayName")
+            or str(p.get("name") or "").strip()
+            or sku
+        )
+        try:
+            qty = max(1, int(p.get("amount") or 1))
+        except (TypeError, ValueError):
+            qty = 1
+        quote.lines.append(
+            QuoteRequestLine(
+                line_number=line_no,
+                variant_gid=variant["id"],
+                sku=variant.get("sku") or sku,
+                title=title,
+                quantity=qty,
+                on_demand=False,
+                negotiated_unit_price=_to_decimal(p.get("price")),
+                currency="CLP",
+            )
+        )
+        line_no += 1
+
+    if not quote.lines:
+        logger.warning(
+            "Webhook APRO IA quotation.created: ningún SKU pudo resolverse en "
+            "Shopify — no se crea la cotización",
+            extra={"folio": folio},
+        )
+        return None
+
+    session.add(quote)
+    session.flush()
+
+    if quote.apro_ia_folio:
+        try:
+            pdf_bytes = apro_ia_client.descargar_pdf(quote.apro_ia_folio)
+            quote_pdf_service.store_quote_pdf(quote, pdf_bytes)
+        except Exception:
+            logger.exception(
+                "Webhook APRO IA quotation.created: no se pudo descargar el "
+                "PDF de APRO IA",
+                extra={"folio": folio, "quote_id": str(quote.id)},
+            )
+
+    try:
+        draft_order_service.create_quote_draft(session, quote)
+        quote.status = "COTIZADA"
+    except Exception:
+        logger.exception(
+            "Webhook APRO IA quotation.created: cotización creada pero falló "
+            "el Draft Order en Shopify — queda en SOLICITADA para reintento "
+            "manual (botón 'crear draft' del panel)",
+            extra={"folio": folio, "quote_id": str(quote.id)},
+        )
+
+    return quote
+
+
+def _sync_lines_from_apro_ia_products(
+    session: Session, quote: QuoteRequest, products: list[Any]
+) -> bool:
+    """Sincroniza cantidad/precio/líneas de ``quote`` con ``products[]`` del
+    webhook APRO IA. APRO IA es la fuente de verdad del precio/cantidad
+    negociado una vez que el Gerente Comercial edita o aprueba la cotización
+    — sin esto, el Draft Order en Shopify queda desactualizado respecto a lo
+    realmente autorizado (caso real: folio CO-076041, cantidad 1→5 y precio
+    12000→20000 nunca llegaron a la línea ni al draft).
+
+    - SKU existente en ``quote.lines``: actualiza cantidad/precio/título.
+    - SKU nuevo (agregado en APRO IA): se resuelve contra Shopify y se agrega
+      como línea nueva; si no matchea ningún variant, se omite con warning.
+    - SKU que ya no viene en ``products``: se elimina la línea (APRO IA quitó
+      ese producto de la cotización).
+
+    Devuelve ``True`` si hubo algún cambio (para decidir si vale la pena
+    reflejarlo en el Draft Order de Shopify).
+    """
+    if not isinstance(products, list) or not products:
+        return False
+
+    changed = False
+    by_sku = {(ln.sku or "").strip().lower(): ln for ln in quote.lines}
+    seen_skus: set[str] = set()
+    shop_domain: str | None = None
+    token: str | None = None
+    next_num = max((ln.line_number for ln in quote.lines), default=0) + 1
+
+    for p in products:
+        if not isinstance(p, dict):
+            continue
+        sku = str(p.get("sku") or "").strip()
+        if not sku:
+            continue
+        sku_key = sku.lower()
+        seen_skus.add(sku_key)
+        price = _to_decimal(p.get("price"))
+        try:
+            qty = max(1, int(p.get("amount") or 1))
+        except (TypeError, ValueError):
+            qty = 1
+        title = str(p.get("name") or "").strip() or None
+
+        existing = by_sku.get(sku_key)
+        if existing:
+            if existing.quantity != qty:
+                existing.quantity = qty
+                changed = True
+            if price is not None and existing.negotiated_unit_price != price:
+                existing.negotiated_unit_price = price
+                changed = True
+            if title and existing.title != title:
+                existing.title = title
+                changed = True
+            continue
+
+        # SKU nuevo (agregado del lado de APRO IA) — resolverlo en Shopify.
+        if shop_domain is None:
+            try:
+                shop_domain, token = resolve_store_token(session, quote.shop_domain)
+            except Exception:
+                logger.exception(
+                    "Webhook APRO IA: no se pudo resolver la tienda Shopify "
+                    "para sincronizar una línea nueva",
+                    extra={"quote_id": str(quote.id), "sku": sku},
+                )
+                continue
+        variant = draft_order_service.resolve_variant_by_sku(shop_domain, token, sku)
+        if not variant:
+            logger.warning(
+                "Webhook APRO IA: SKU nuevo no encontrado en Shopify — se omite",
+                extra={"quote_id": str(quote.id), "sku": sku},
+            )
+            continue
+        new_line = QuoteRequestLine(
+            quote_request_id=quote.id,
+            line_number=next_num,
+            variant_gid=variant["id"],
+            sku=variant.get("sku") or sku,
+            title=title or variant.get("displayName") or sku,
+            quantity=qty,
+            on_demand=False,
+            negotiated_unit_price=price,
+            currency="CLP",
+        )
+        session.add(new_line)
+        quote.lines.append(new_line)
+        next_num += 1
+        changed = True
+
+    # Líneas que ya no vienen en products[] — APRO IA quitó ese producto.
+    for sku_key, ln in list(by_sku.items()):
+        if sku_key not in seen_skus:
+            quote.lines.remove(ln)
+            session.delete(ln)
+            changed = True
+
+    return changed
+
+
+def handle_apro_ia_webhook(payload: dict[str, Any]) -> dict[str, Any]:
+    """Procesa un evento del webhook de eventos de APRO IA.
+
+    Ubica la ``QuoteRequest`` por ``apro_ia_id`` (respaldo: ``apro_ia_folio``
+    si el payload no trae ``id``) y persiste el último ``apro_ia_status``
+    reportado por el DMS externo. El folio de APRO IA no es único entre
+    cotizaciones (caso real: folio ``AC-000007`` reusado por dos cotizaciones
+    de clientes distintos), así que no puede ser el criterio principal de
+    matching — usarlo pisaría la cotización equivocada. Este
+    campo es informativo del flujo de aprobación gerencial de APRO IA — no
+    reemplaza ``QuoteRequest.status`` (ciclo Shopify draft/order), que sigue
+    dependiendo del webhook ``orders/create`` y de las acciones de SALES.
+
+    Si ``quotation.created`` llega para una cotización que no existe en
+    nuestra BD (se originó directo en el DMS de APRO IA, no en nuestro
+    carrito), se crea el registro y su Draft Order — ver
+    ``_create_quote_from_apro_ia_payload``.
+
+    Para cualquier evento sobre una cotización que ya existe, ``products[]``
+    se sincroniza a las líneas (``_sync_lines_from_apro_ia_products``) y, si
+    cambió algo y ya hay Draft Order, se actualiza en Shopify — APRO IA es la
+    fuente de verdad del precio/cantidad negociado en cualquier punto del
+    flujo de aprobación gerencial, no solo al crear.
+
+    Solo notifica a SALES por email en ``quotation.approved``/``rejected`` y
+    únicamente si el estado cambió, para no reenviar el mismo aviso en
+    reintentos del webhook.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("Payload inválido")
+    event = str(payload.get("event") or "").strip()
+    if event not in APRO_IA_WEBHOOK_EVENTS:
+        raise ValueError(f"Evento desconocido: {event}")
+
+    folio = str(payload.get("folio") or "").strip()
+    apro_ia_id = str(payload.get("id") or "").strip()
+    if not folio and not apro_ia_id:
+        raise ValueError("El payload debe incluir folio o id")
+
+    status = str(payload.get("status") or "").strip()
+
+    with get_session() as session:
+        stmt = select(QuoteRequest)
+        stmt = stmt.where(
+            QuoteRequest.apro_ia_id == apro_ia_id
+            if apro_ia_id
+            else QuoteRequest.apro_ia_folio == folio
+        )
+        quote = session.scalars(stmt).first()
+
+        if not quote:
+            if event != "quotation.created":
+                logger.warning(
+                    "Webhook APRO IA: no se encontró QuoteRequest para el evento",
+                    extra={"event": event, "folio": folio, "apro_ia_id": apro_ia_id},
+                )
+                session.commit()
+                return {"received": True, "matched": False}
+
+            created = _create_quote_from_apro_ia_payload(
+                session, payload, folio=folio, apro_ia_id=apro_ia_id, status=status
+            )
+            if not created:
+                session.commit()
+                return {"received": True, "matched": False, "created": False}
+
+            quote_id = str(created.id)
+            company_name = (
+                (created.company.name if created.company else None)
+                or created.requested_by_name
+                or created.shopify_company_id
+            )
+            admin_emails = _admin_emails(session, created.company)
+            line_count = len(created.lines)
+            session.commit()
+
+            encolar_nueva_cotizacion(
+                admin_emails=admin_emails,
+                company_name=company_name or "",
+                quote_id=quote_id,
+                line_count=line_count,
+            )
+            return {
+                "received": True,
+                "matched": False,
+                "created": True,
+                "quote_id": quote_id,
+                "status": status,
+            }
+
+        status_changed = status != "" and quote.apro_ia_status != status
+        if status:
+            quote.apro_ia_status = status
+
+        lines_changed = _sync_lines_from_apro_ia_products(
+            session, quote, payload.get("products") or []
+        )
+        if lines_changed and quote.draft_order_gid:
+            try:
+                draft_order_service.update_quote_draft(session, quote)
+            except Exception:
+                logger.exception(
+                    "Webhook APRO IA: no se pudo actualizar el Draft Order en "
+                    "Shopify tras sincronizar productos",
+                    extra={"quote_id": str(quote.id), "folio": quote.folio},
+                )
+
+        company_name = (
+            (quote.company.name if quote.company else None)
+            or quote.requested_by_name
+            or quote.shopify_company_id
+        )
+        admin_emails = _admin_emails(session, quote.company)
+        quote_id = str(quote.id)
+        quote_folio = quote.folio or folio
+        session.commit()
+
+    if status_changed and event in ("quotation.approved", "quotation.rejected"):
+        encolar_cotizacion_apro_ia_estado(
+            admin_emails=admin_emails,
+            company_name=company_name,
+            folio=quote_folio,
+            quote_id=quote_id,
+            event=event,
+            status=status,
+        )
+
+    return {"received": True, "matched": True, "quote_id": quote_id, "status": status}
+
+
+# ---------------------------------------------------------------------------
 # Negociación (SALES)
 # ---------------------------------------------------------------------------
 def _load_for_negotiation(session: Session, quote_id: str) -> QuoteRequest:
@@ -477,13 +924,58 @@ def _assign_folio(session: Session, quote: QuoteRequest) -> None:
     quote.folio = f"CO-{int(n):06d}"
 
 
+def _company_assigned_sales_user(session: Session, company: Company | None) -> User | None:
+    """Vendedor de cartera de la empresa vía ``UserCompany`` (asignación manual o
+    auto-selección Ecommerce en la aprobación de la solicitud de registro).
+
+    Distinto de ``Company.referred_by_user_id``, que solo se llena si la empresa
+    se registró a través del link de invitación de un vendedor (``?from=<code>``).
+    Una empresa puede no tener ``referred_by_user_id`` y aun así tener vendedor
+    asignado solo por esta tabla — sin este fallback, `_seller_email`/`_seller_sap_code`
+    caían siempre al vendedor por defecto para esos casos.
+    """
+    if not company:
+        return None
+    return session.scalar(
+        select(User)
+        .join(UserCompany, UserCompany.user_id == User.id)
+        .where(
+            UserCompany.company_id == company.id,
+            User.role == "SALES",
+            User.status == "ACTIVE",
+        )
+        .order_by(User.id)
+        .limit(1)
+    )
+
+
 def _seller_email(session: Session, company: Company | None) -> str:
     if company and company.referred_by_user_id:
         u = session.get(User, company.referred_by_user_id)
         if u and u.email:
             return u.email
+    u = _company_assigned_sales_user(session, company)
+    if u and u.email:
+        return u.email
     # Fallback: vendedor por defecto (debe ser un usuario registrado en APRO IA)
     return (os.environ.get("APRO_IA_DEFAULT_SELLER_EMAIL") or "").strip()
+
+
+def _seller_sap_code(session: Session, seller_email: str, company: Company | None) -> str:
+    """Resuelve el código SAP del vendedor — APRO IA lo usa para identificar
+    al vendedor porque sus emails no siempre coinciden con los nuestros.
+    """
+    user: User | None = None
+    if seller_email:
+        user = session.scalar(select(User).where(User.email == seller_email))
+    if not user and company and company.referred_by_user_id:
+        user = session.get(User, company.referred_by_user_id)
+    if not user:
+        user = _company_assigned_sales_user(session, company)
+    if user and user.codigo_sap:
+        return user.codigo_sap
+    # Fallback: código SAP genérico para cotizaciones sin vendedor identificado.
+    return (os.environ.get("APRO_IA_DEFAULT_SELLER_SAP_CODE") or "000").strip() or "000"
 
 
 def _regenerate_pdf(session: Session, quote: QuoteRequest) -> None:
@@ -525,10 +1017,12 @@ def _sync_apro_ia_and_pdf(
         else:
             if not seller_email:
                 raise RuntimeError("seller_email requerido para crear en APRO IA")
+            seller_sap_code = _seller_sap_code(session, seller_email, company)
             data = apro_ia_client.crear_cotizacion(
                 client_rut=client_rut,
                 client_nombre=client_nombre,
                 seller_email=seller_email,
+                seller_sap_code=seller_sap_code,
                 productos=productos,
                 comment=quote.comment,
             )

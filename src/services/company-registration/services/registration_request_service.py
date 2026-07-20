@@ -665,6 +665,7 @@ class RegistrationRequestService:
                 email=contact_email or None,
                 name=contact_name or None,
                 phone=contact_phone,
+                is_main_contact=True,
             )
             session.add(client)
 

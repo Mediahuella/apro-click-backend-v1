@@ -10,6 +10,7 @@ from aws_lambda_powertools.event_handler.exceptions import (
     BadRequestError,
     NotFoundError,
     InternalServerError,
+    UnauthorizedError,
 )
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
@@ -34,6 +35,7 @@ for path in possible_shared_paths:
 from services.address_service import AddressService
 from services.company_service import CompanyService
 from services.contact_service import ContactService
+from utils.public_api_key import require_companies_public_api_key
 
 logger = Logger()
 tracer = Tracer()
@@ -41,6 +43,123 @@ app = APIGatewayHttpResolver()
 company_service = CompanyService()
 address_service = AddressService()
 contact_service = ContactService()
+
+
+def _headers_dict() -> dict[str, str]:
+    raw = app.current_event.headers
+    if not raw:
+        return {}
+    return {str(k): (v if v is not None else "") for k, v in raw.items()}
+
+
+def _params() -> dict[str, str]:
+    return app.current_event.query_string_parameters or {}
+
+
+def _resolve_storefront_company_id(shopify_company_id: str) -> str:
+    """Resuelve el UUID interno de ``Company`` a partir de ``shopify_company_id``.
+
+    Nunca acepta un UUID interno desde el cliente: el storefront solo conoce
+    el GID de Shopify de la sesión B2B logueada (``customer.current_company.id``).
+    """
+    shopify_company_id = str(shopify_company_id or "").strip()
+    if not shopify_company_id:
+        raise BadRequestError("shopify_company_id es obligatorio")
+    company = company_service.get_company_by_shopify_id(shopify_company_id)
+    if not company:
+        raise NotFoundError("Empresa no encontrada")
+    return company["id"]
+
+
+# ---------------------------------------------------------------------------
+# Storefront público — autogestión de sucursales (theme app extension)
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/storefront/company/addresses")
+@tracer.capture_method
+def storefront_list_addresses():
+    try:
+        require_companies_public_api_key(_headers_dict())
+        company_id = _resolve_storefront_company_id(
+            _params().get("shopify_company_id", "")
+        )
+        result = address_service.list_addresses(company_id)
+        return {"statusCode": 200, "message": "OK", "data": result}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error listando sucursales (storefront)")
+        raise InternalServerError("Error listando sucursales")
+
+
+@app.post("/api/v1/storefront/company/addresses")
+@tracer.capture_method
+def storefront_create_address():
+    try:
+        require_companies_public_api_key(_headers_dict())
+        body = app.current_event.json_body or {}
+        company_id = _resolve_storefront_company_id(
+            str(body.get("shopify_company_id") or "")
+        )
+        result = address_service.create_address(company_id, body)
+        return {"statusCode": 201, "message": "Address created", "data": result}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error creando sucursal (storefront)")
+        raise InternalServerError("Error creando sucursal")
+
+
+@app.put("/api/v1/storefront/company/addresses/<address_id>")
+@tracer.capture_method
+def storefront_update_address(address_id: str):
+    try:
+        require_companies_public_api_key(_headers_dict())
+        company_id = _resolve_storefront_company_id(
+            _params().get("shopify_company_id", "")
+        )
+        body = app.current_event.json_body or {}
+        if not body:
+            raise BadRequestError("Request body is required")
+        result = address_service.update_address(company_id, address_id, body)
+        return {"statusCode": 200, "message": "Address updated", "data": result}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error actualizando sucursal (storefront)")
+        raise InternalServerError("Error actualizando sucursal")
+
+
+@app.delete("/api/v1/storefront/company/addresses/<address_id>")
+@tracer.capture_method
+def storefront_delete_address(address_id: str):
+    try:
+        require_companies_public_api_key(_headers_dict())
+        company_id = _resolve_storefront_company_id(
+            _params().get("shopify_company_id", "")
+        )
+        address_service.delete_address(company_id, address_id)
+        return {"statusCode": 200, "message": "Address deleted"}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error eliminando sucursal (storefront)")
+        raise InternalServerError("Error eliminando sucursal")
 
 
 @app.post("/api/v1/companies")
@@ -56,6 +175,11 @@ def create_company():
             name=name,
             company_type=company_type,
             payment_type=payment_type,
+            billing_rut=body.get("billing_rut"),
+            billing_razon_social=body.get("billing_razon_social"),
+            billing_giro=body.get("billing_giro"),
+            billing_region=body.get("billing_region"),
+            billing_direccion=body.get("billing_direccion"),
         )
         return {"statusCode": 201, "message": "Company created", "data": result}
 
@@ -125,6 +249,23 @@ def update_company(company_id: str):
     except Exception:
         logger.exception("Error updating company")
         raise InternalServerError("Error updating company")
+
+
+@app.put("/api/v1/companies/<company_id>/assigned-user")
+@tracer.capture_method
+def set_company_assigned_user(company_id: str):
+    try:
+        body = app.current_event.json_body or {}
+        user_id = body.get("user_id") or None
+
+        result = company_service.set_assigned_user(company_id, user_id)
+        return {"statusCode": 200, "message": "Assigned user updated", "data": result}
+
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except Exception:
+        logger.exception("Error setting company assigned user")
+        raise InternalServerError("Error setting assigned user")
 
 
 @app.delete("/api/v1/companies/<company_id>")
@@ -247,6 +388,23 @@ def create_company_contact(company_id: str):
     except Exception:
         logger.exception("Error creating company contact")
         raise InternalServerError("Error creating contact")
+
+
+@app.get("/api/v1/companies/<company_id>/contacts/<client_id>")
+@tracer.capture_method
+def get_company_contact(company_id: str, client_id: str):
+    try:
+        result = contact_service.get_contact(company_id, client_id)
+        if not result:
+            raise NotFoundError(f"Contact '{client_id}' not found")
+        return {"statusCode": 200, "message": "Contact retrieved", "data": result}
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except NotFoundError:
+        raise
+    except Exception:
+        logger.exception("Error getting company contact")
+        raise InternalServerError("Error getting contact")
 
 
 @app.put("/api/v1/companies/<company_id>/contacts/<client_id>")

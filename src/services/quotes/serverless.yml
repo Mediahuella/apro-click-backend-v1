@@ -42,9 +42,15 @@ provider:
     # APRO IA (DMS externo): URL base y token Bearer para sincronizar cotizaciones y obtener PDF.
     APRO_IA_BASE_URL: ${env:APRO_IA_BASE_URL, ''}
     APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
+    # Clave que APRO IA envía en el header x-api-key de su webhook de eventos
+    # (quotation.created/updated/approved/rejected). Distinta de QUOTES_PUBLIC_API_KEY.
+    APRO_IA_WEBHOOK_API_KEY: ${env:APRO_IA_WEBHOOK_API_KEY, ''}
     # Vendedor por defecto para crear cotizaciones en APRO IA cuando la empresa no tiene
     # vendedor asignado (referred_by_user_id vacío). Debe ser un email registrado en APRO IA DMS.
     APRO_IA_DEFAULT_SELLER_EMAIL: ${env:APRO_IA_DEFAULT_SELLER_EMAIL, ''}
+    # Código SAP por defecto cuando no se puede resolver el de un usuario (User.codigo_sap).
+    # APRO IA identifica al vendedor por este código, no por el email.
+    APRO_IA_DEFAULT_SELLER_SAP_CODE: ${env:APRO_IA_DEFAULT_SELLER_SAP_CODE, '000'}
     # Cola SQS del servicio notifications para envío de emails.
     NOTIFICATIONS_QUEUE_URL:
       Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-url
@@ -86,6 +92,9 @@ functions:
           path: /api/v1/quotes
           method: get
       # Rutas específicas antes que GET/PATCH /{quote_id}.
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia
+          method: post
       - httpApi:
           path: /api/v1/quotes/{quote_id}/pdf
           method: get

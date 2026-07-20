@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.base import Base, DictMixin, TimestampMixin
@@ -31,6 +31,9 @@ class Client(Base, TimestampMixin, DictMixin):
     email: Mapped[str | None] = mapped_column(String, nullable=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_main_contact: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # relationships
     company = relationship("Company", back_populates="clients")

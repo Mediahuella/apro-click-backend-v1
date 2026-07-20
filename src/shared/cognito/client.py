@@ -162,6 +162,19 @@ def initiate_auth(email: str, password: str) -> dict[str, Any]:
     )
 
 
+def refresh_auth(refresh_token: str) -> dict[str, Any]:
+    """Renueva access/id token a partir de un refresh token (sin rotarlo)."""
+    client = _get_cognito_client()
+    return client.admin_initiate_auth(
+        UserPoolId=get_user_pool_id(),
+        ClientId=get_app_client_id(),
+        AuthFlow="REFRESH_TOKEN_AUTH",
+        AuthParameters={
+            "REFRESH_TOKEN": refresh_token,
+        },
+    )
+
+
 def respond_to_auth_challenge(
     session: str,
     challenge_name: str,

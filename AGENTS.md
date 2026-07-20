@@ -166,6 +166,13 @@ El form público de registro lo reenvía como `referral_code` en el body. `Regis
 
 **Relaciones SQLAlchemy críticas** — con dos FKs entre `companies` y `users` (`users.company_id` ↔ `companies.referred_by_user_id`), las relaciones explicitan `foreign_keys=`. Ver `Company.users` y `User.company` en `database/models/`.
 
+**Sucursales (`CompanyAddress`) y contactos (`Client`)** — CRUD en el stack `companies` (`services/address_service.py`, `services/contact_service.py`):
+
+- `is_primary` (addresses) e `is_main_contact` (clients, persistido) son únicos por empresa vía índice único parcial (`WHERE is_primary/is_main_contact = true`, migración `024`). `create_address`/`update_address` desmarcan el resto de la empresa en la misma transacción al marcar una nueva primaria; `delete_address` bloquea el borrado de la sucursal principal (mismo guardrail que ya tenía `delete_contact` para el contacto principal).
+- Editar el email de un contacto (`update_contact`) **no** usa `customerUpdate` de Shopify (el email es el login del Customer) — resuelve/crea el Customer del nuevo email y reasigna el `CompanyContact`, desvinculando el anterior.
+- `GET /api/v1/companies/{company_id}/contacts/{client_id}` (individual) existe igual que para addresses.
+- **Canal público storefront** (autogestión desde `aproclick-connector`): `GET/POST/PUT/DELETE /api/v1/storefront/company/addresses[/{address_id}]`, autenticado con header `X-Api-Key` (`COMPANIES_PUBLIC_API_KEY`, mismo patrón que `QUOTES_PUBLIC_API_KEY`). Nunca acepta el UUID interno de `Company`: resuelve `company_id` a partir de `shopify_company_id` (`CompanyService.get_company_by_shopify_id`) — el storefront solo conoce el GID de Shopify de su propia sesión B2B (`customer.current_company.id`). Delega en `AddressService` ya existente, heredando automáticamente las protecciones de unicidad/borrado.
+
 ### Conexión
 
 - La variable `DATABASE_URL` contiene el string PostgreSQL completo (con `sslmode=require`).

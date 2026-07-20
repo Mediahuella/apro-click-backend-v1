@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from aws_lambda_powertools import Logger
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 service_root = Path(__file__).resolve().parent.parent
 if str(service_root) not in sys.path:
@@ -91,7 +91,6 @@ class ContactService:
             )
             rows = [c.to_dict() for c in session.scalars(stmt)]
 
-        main_customer_numeric: str | None = None
         contact_gid_by_customer: dict[str, str] = {}
         if shopify_company_id:
             try:
@@ -104,28 +103,30 @@ class ContactService:
                         contact_gid_by_customer[str(c["customer_numeric_id"])] = (
                             str(c["contact_gid"])
                         )
-                main_gid = state.get("main_contact_gid")
-                if main_gid:
-                    for c in state["contacts"]:
-                        if c.get("contact_gid") == main_gid:
-                            main_customer_numeric = c.get("customer_numeric_id")
-                            break
             except Exception as e:
                 logger.warning(
                     "list_contacts: no se pudo leer estado Shopify — %s", e
                 )
 
+        # is_main_contact se lee de la fila local (persistido por set_main_contact),
+        # no requiere una llamada extra a Shopify.
         enriched: list[dict[str, Any]] = []
         for row in rows:
             cust = row.get("shopify_customer_id")
             row["shopify_contact_gid"] = (
                 contact_gid_by_customer.get(str(cust)) if cust else None
             )
-            row["is_main_contact"] = bool(
-                cust and main_customer_numeric and str(cust) == str(main_customer_numeric)
-            )
             enriched.append(row)
         return {"contacts": enriched}
+
+    def get_contact(self, company_id: str, client_id: str) -> dict[str, Any] | None:
+        self._validate_uuid(company_id)
+        self._validate_uuid(client_id)
+        with get_session() as session:
+            row = session.get(Client, uuid.UUID(client_id))
+            if not row or str(row.company_id) != company_id:
+                return None
+            return row.to_dict()
 
     # ------------------------------------------------------------------
     # Mutaciones
@@ -230,31 +231,169 @@ class ContactService:
         )
         return result
 
+    def find_or_create_contact(
+        self, company_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Como `create_contact`, pero reutiliza el `Client` local si ya existe
+        uno con ese email para la empresa, en vez de fallar. Pensado para flujos
+        que asocian un cliente "al paso" (p. ej. crear/editar una sucursal)."""
+        self._validate_uuid(company_id)
+        data = self._validate_payload(payload, require_email=True)
+
+        with get_session() as session:
+            existing = session.scalar(
+                select(Client).where(
+                    Client.company_id == uuid.UUID(company_id),
+                    Client.email == data["email"],
+                )
+            )
+            existing_id = str(existing.id) if existing else None
+
+        if existing_id:
+            update_payload = {k: v for k, v in data.items() if k != "email"}
+            if update_payload:
+                return self.update_contact(company_id, existing_id, update_payload)
+            with get_session() as session:
+                row = session.get(Client, uuid.UUID(existing_id))
+                return row.to_dict()
+
+        return self.create_contact(company_id, data)
+
     def update_contact(
         self, company_id: str, client_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         self._validate_uuid(company_id)
         self._validate_uuid(client_id)
         data = self._validate_payload(payload, require_email=False)
-        # Email no es editable.
-        data.pop("email", None)
 
         with get_session() as session:
             row = session.get(Client, uuid.UUID(client_id))
             if not row or str(row.company_id) != company_id:
                 raise ValueError(f"Contact '{client_id}' not found")
             shopify_customer_id = row.shopify_customer_id
+            is_main_contact = row.is_main_contact
             current = row.to_dict()
 
-        if not any(k in data for k in ("name", "first_name", "last_name", "phone")):
+        new_email = data.get("email")
+        email_changed = bool(new_email) and new_email != current.get("email")
+
+        if not email_changed and not any(
+            k in data for k in ("name", "first_name", "last_name", "phone")
+        ):
             return current
+
+        if email_changed:
+            with get_session() as session:
+                dupe = session.scalar(
+                    select(Client).where(
+                        Client.company_id == uuid.UUID(company_id),
+                        Client.email == new_email,
+                        Client.id != uuid.UUID(client_id),
+                    )
+                )
+            if dupe:
+                raise ValueError(
+                    f"Ya existe un contacto con el correo '{new_email}' "
+                    "para esta empresa."
+                )
 
         first_name = data.get("first_name")
         last_name = data.get("last_name")
         if "name" in data and first_name is None and last_name is None:
             first_name, last_name = _split_name(data["name"])
 
-        if shopify_customer_id:
+        new_customer_id = shopify_customer_id
+        old_contact_gid: str | None = None
+        new_contact_gid: str | None = None
+
+        if email_changed:
+            # Editar el email de un contacto implica revincularlo a otro/nuevo
+            # Customer de Shopify: el email es el login del Customer, así que no
+            # se toca vía customerUpdate. En su lugar se resuelve/crea el Customer
+            # del nuevo email y se reasigna el CompanyContact.
+            shop_domain, access_token = _resolve_shop_and_token()
+            with get_session() as session:
+                company = session.get(Company, uuid.UUID(company_id))
+                shopify_company_id = company.shopify_company_id if company else None
+            if not shopify_company_id:
+                raise ValueError(
+                    "La empresa no tiene shopify_company_id; no se puede "
+                    "reasignar el contacto en Shopify."
+                )
+
+            if shopify_customer_id:
+                old_contact_gid = self._resolve_contact_gid(
+                    shop_domain,
+                    access_token,
+                    shopify_company_id=shopify_company_id,
+                    shopify_customer_id=shopify_customer_id,
+                )
+
+            new_customer_id = find_customer_numeric_by_email(
+                shop_domain, access_token, new_email
+            )
+            if new_customer_id is None:
+                new_customer_id = create_customer(
+                    shop_domain,
+                    access_token,
+                    email=new_email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    phone=data.get("phone"),
+                )
+            else:
+                try:
+                    update_customer(
+                        shop_domain,
+                        access_token,
+                        customer_id=new_customer_id,
+                        first_name=first_name if first_name is not None else None,
+                        last_name=last_name if last_name is not None else None,
+                        phone=data.get("phone") if "phone" in data else None,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "update_contact: customerUpdate previo falló — %s", e
+                    )
+
+            try:
+                assign_customer_as_contact(
+                    shop_domain,
+                    access_token,
+                    company_id=shopify_company_id,
+                    customer_id=new_customer_id,
+                )
+            except ValueError as e:
+                msg = str(e).lower()
+                if "already" not in msg and "exist" not in msg:
+                    raise
+
+            if old_contact_gid:
+                try:
+                    remove_company_contact(shop_domain, access_token, old_contact_gid)
+                except Exception as e:
+                    logger.warning(
+                        "update_contact: no se pudo desvincular el contacto "
+                        "anterior — %s",
+                        e,
+                    )
+
+            new_contact_gid = self._resolve_contact_gid(
+                shop_domain,
+                access_token,
+                shopify_company_id=shopify_company_id,
+                shopify_customer_id=new_customer_id,
+            )
+            if is_main_contact and new_contact_gid:
+                set_main_contact(
+                    shop_domain,
+                    access_token,
+                    company_id=shopify_company_id,
+                    contact_gid=new_contact_gid,
+                )
+        elif shopify_customer_id and any(
+            k in data for k in ("name", "first_name", "last_name", "phone")
+        ):
             shop_domain, access_token = _resolve_shop_and_token()
             update_customer(
                 shop_domain,
@@ -279,6 +418,9 @@ class ContactService:
                 row.name = full_name
             if "phone" in data:
                 row.phone = data.get("phone")
+            if email_changed:
+                row.email = new_email
+                row.shopify_customer_id = new_customer_id
             session.commit()
             session.refresh(row)
             result = row.to_dict()
@@ -374,6 +516,17 @@ class ContactService:
             company_id=shopify_company_id,
             contact_gid=contact_gid,
         )
+
+        with get_session() as session:
+            session.execute(
+                update(Client)
+                .where(Client.company_id == uuid.UUID(company_id))
+                .values(is_main_contact=False)
+            )
+            row = session.get(Client, uuid.UUID(client_id))
+            if row:
+                row.is_main_contact = True
+            session.commit()
 
         logger.info(
             "Main contact actualizado",

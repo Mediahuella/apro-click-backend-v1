@@ -27,6 +27,7 @@ provider:
     REGION: ${self:provider.region}
     DATABASE_URL: ${env:DATABASE_URL, ''}
     ERROR_LOGS_TABLE: apro-click-${self:provider.stage}-error-logs
+    ERROR_LOGS_SESSION_EVENTS_API_KEY: ${env:ERROR_LOGS_SESSION_EVENTS_API_KEY, ''}
   iam:
     role:
       statements:

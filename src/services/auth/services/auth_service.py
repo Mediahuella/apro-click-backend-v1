@@ -36,6 +36,7 @@ from sqlalchemy import select
 
 from cognito.client import (
     initiate_auth,
+    refresh_auth,
     respond_to_auth_challenge,
     forgot_password,
     confirm_forgot_password,
@@ -86,6 +87,18 @@ class AuthService:
             "access_token": auth_result["AccessToken"],
             "id_token": auth_result["IdToken"],
             "refresh_token": auth_result["RefreshToken"],
+            "expires_in": auth_result["ExpiresIn"],
+            "token_type": auth_result["TokenType"],
+        }
+
+    def refresh_session(self, refresh_token: str) -> dict[str, Any]:
+        """Renueva access/id token a partir del refresh token (no rota el refresh token)."""
+        response = refresh_auth(refresh_token)
+        auth_result = response["AuthenticationResult"]
+        logger.info("Session refreshed")
+        return {
+            "access_token": auth_result["AccessToken"],
+            "id_token": auth_result["IdToken"],
             "expires_in": auth_result["ExpiresIn"],
             "token_type": auth_result["TokenType"],
         }

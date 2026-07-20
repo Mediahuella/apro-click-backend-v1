@@ -112,11 +112,19 @@ class QuoteRequest(Base, TimestampMixin, DictMixin):
         DateTime(timezone=True), nullable=True
     )
 
-    #: Referencia al registro en APRO IA (DMS externo).
-    apro_ia_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Referencia al registro en APRO IA (DMS externo). Criterio principal de
+    #: matching del webhook — el folio no es único entre cotizaciones (ver
+    #: ``handle_apro_ia_webhook``).
+    apro_ia_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     apro_ia_folio: Mapped[str | None] = mapped_column(
         String(20), nullable=True, index=True
     )
+    #: Último estado reportado por el webhook de APRO IA (``Pendiente``,
+    #: ``Pendiente Gerente Comercial``, ``Autorizada``, ``Rechazada``). No
+    #: reemplaza ``status`` (ciclo Shopify/draft); es informativo del DMS externo.
+    apro_ia_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     company = relationship("Company")
     lines = relationship(

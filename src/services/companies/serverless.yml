@@ -28,6 +28,7 @@ provider:
     DATABASE_URL: ${env:DATABASE_URL, ''}
     SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
     SHOPIFY_SHOP: ${env:SHOPIFY_SHOP, ''}
+    COMPANIES_PUBLIC_API_KEY: ${env:COMPANIES_PUBLIC_API_KEY, ''}
 
 functions:
   health:
@@ -56,6 +57,9 @@ functions:
           path: /api/v1/companies/{company_id}
           method: delete
       - httpApi:
+          path: /api/v1/companies/{company_id}/assigned-user
+          method: put
+      - httpApi:
           path: /api/v1/companies/{company_id}/addresses
           method: get
       - httpApi:
@@ -76,6 +80,9 @@ functions:
       - httpApi:
           path: /api/v1/companies/{company_id}/contacts
           method: post
+      - httpApi:
+          path: /api/v1/companies/{company_id}/contacts/{client_id}
+          method: get
       - httpApi:
           path: /api/v1/companies/{company_id}/contacts/{client_id}
           method: put
@@ -91,3 +98,15 @@ functions:
       - httpApi:
           path: /api/v1/companies/{company_id}/contacts/{client_id}/locations
           method: put
+      - httpApi:
+          path: /api/v1/storefront/company/addresses
+          method: get
+      - httpApi:
+          path: /api/v1/storefront/company/addresses
+          method: post
+      - httpApi:
+          path: /api/v1/storefront/company/addresses/{address_id}
+          method: put
+      - httpApi:
+          path: /api/v1/storefront/company/addresses/{address_id}
+          method: delete

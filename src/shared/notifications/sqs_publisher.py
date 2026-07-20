@@ -151,3 +151,25 @@ def encolar_cotizacion_lista(
             "total": total,
         },
     )
+
+
+def encolar_cotizacion_apro_ia_estado(
+    admin_emails: list[str],
+    company_name: str,
+    folio: str,
+    quote_id: str,
+    event: str,
+    status: str,
+) -> None:
+    """Encola aviso a SALES/admins de un cambio de estado reportado por el webhook APRO IA."""
+    _encolar(
+        "cotizacion_apro_ia_estado",
+        {
+            "admin_emails": admin_emails,
+            "company_name": company_name,
+            "folio": folio,
+            "quote_id": quote_id,
+            "event": event,
+            "status": status,
+        },
+    )

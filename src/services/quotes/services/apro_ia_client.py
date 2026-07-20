@@ -96,13 +96,21 @@ def crear_cotizacion(
     client_rut: str,
     client_nombre: str,
     seller_email: str,
+    seller_sap_code: str,
     productos: list[dict[str, Any]],
     comment: str | None = None,
 ) -> dict[str, Any]:
-    """Crea una cotización en APRO IA y devuelve el objeto ``data``."""
+    """Crea una cotización en APRO IA y devuelve el objeto ``data``.
+
+    APRO IA identifica al vendedor por ``seller_sap_code``, no por
+    ``seller_email`` (sus emails de vendedor no siempre coinciden con los
+    nuestros) — se envían ambos, pero el código SAP es la clave real.
+    """
     body: dict[str, Any] = {
-        "client": {"rut": client_rut, "nombre": client_nombre},
+        # El PDF de APRO IA documenta "nombre", pero su API real (y el GET/webhook) usan "name".
+        "client": {"rut": client_rut, "name": client_nombre},
         "seller_email": seller_email,
+        "seller_sap_code": seller_sap_code,
         "products": productos,
     }
     if comment:

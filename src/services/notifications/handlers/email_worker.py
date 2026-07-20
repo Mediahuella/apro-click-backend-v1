@@ -35,6 +35,7 @@ for path in possible_shared_paths:
 from notifications.ses_email import (  # noqa: E402
     notify_approval,
     notify_confirmacion_solicitud,
+    notify_cotizacion_apro_ia_estado,
     notify_cotizacion_lista,
     notify_new_request,
     notify_nueva_cotizacion,
@@ -85,6 +86,14 @@ _HANDLERS: dict[str, Any] = {
         folio=p["folio"],
         pdf_url=p["pdf_url"],
         total=p.get("total"),
+    ),
+    "cotizacion_apro_ia_estado": lambda p: notify_cotizacion_apro_ia_estado(
+        admin_emails=p["admin_emails"],
+        company_name=p["company_name"],
+        folio=p["folio"],
+        quote_id=p["quote_id"],
+        event=p["event"],
+        status=p["status"],
     ),
 }
 

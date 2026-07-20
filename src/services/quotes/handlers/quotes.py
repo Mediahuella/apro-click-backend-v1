@@ -4,7 +4,13 @@
 - ``GET /api/v1/quotes`` y ``GET /api/v1/quotes/{id}`` — Cognito (panel) o storefront
   (X-Api-Key + ``shopify_company_id`` query).
 - ``GET /api/v1/quotes/{id}/pdf`` — Cognito / storefront / email (token HMAC); 302 al presigned.
-- ``PATCH /api/v1/quotes/{id}`` y ``POST .../draft|invoice|complete`` — SALES/SUPERADMIN.
+- ``PATCH /api/v1/quotes/{id}`` y ``POST .../draft|invoice|complete``, ``GET .../shipping-rates``
+  — SALES/ADMIN/SUPERADMIN, y además acotado a las empresas visibles del usuario
+  (``_ensure_quote_in_scope``): un SALES no puede negociar cotizaciones de una
+  empresa que no le corresponde aunque conozca el ``quote_id``.
+- ``POST /api/v1/quotes/webhooks/apro-ia`` — webhook del DMS externo APRO IA
+  (header ``x-api-key``); sincroniza ``apro_ia_status`` y avisa a SALES en
+  aprobación/rechazo. Ver ``docs/Webhook eventos.md``.
 """
 from __future__ import annotations
 
@@ -47,7 +53,11 @@ from utils.cognito_quote_access import (  # noqa: E402
     get_user_by_cognito_access_token,
     parse_bearer_authorization,
 )
-from utils.quotes_api_key import require_quotes_api_key, verify_pdf_token  # noqa: E402
+from utils.quotes_api_key import (  # noqa: E402
+    require_apro_ia_webhook_key,
+    require_quotes_api_key,
+    verify_pdf_token,
+)
 
 logger = Logger()
 tracer = Tracer()
@@ -85,6 +95,19 @@ def _require_negotiator() -> dict:
     return user
 
 
+def _ensure_quote_in_scope(quote_id: str, user: dict) -> None:
+    """Verifica que ``quote_id`` pertenezca a una empresa visible para ``user``.
+
+    ``_require_negotiator`` solo valida el rol (SALES/ADMIN/SUPERADMIN) — sin
+    esto, cualquier SALES podría negociar/enviar invoice/completar una
+    cotización de una empresa que no le corresponde con solo conocer el
+    ``quote_id``. Reusa ``quote_service.get_quote`` (mismo scope que el
+    listado): SUPERADMIN/ADMIN ven todo, SALES solo sus empresas asignadas.
+    """
+    if not quote_service.get_quote(quote_id, user=user):
+        raise NotFoundError("Cotización no encontrada")
+
+
 # ---------------------------------------------------------------------------
 # Público — crear solicitud desde el carrito
 # ---------------------------------------------------------------------------
@@ -108,6 +131,30 @@ def create_quote():
     except Exception:
         logger.exception("Error creando solicitud de cotización")
         raise InternalServerError("Error creando solicitud de cotización")
+
+
+# ---------------------------------------------------------------------------
+# Webhook APRO IA — eventos de cotización (ver docs/Webhook eventos.md)
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/quotes/webhooks/apro-ia")
+@tracer.capture_method
+def apro_ia_webhook():
+    try:
+        require_apro_ia_webhook_key(_headers_dict())
+        body = app.current_event.json_body
+        if not isinstance(body, dict):
+            raise BadRequestError("Body inválido")
+        data = quote_service.handle_apro_ia_webhook(body)
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error procesando webhook APRO IA")
+        raise InternalServerError("Error procesando webhook APRO IA")
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +240,7 @@ def download_pdf(quote_id: str):
 def create_draft(quote_id: str):
     try:
         user = _require_negotiator()
+        _ensure_quote_in_scope(quote_id, user)
         seller_email = user.get("email") or ""
         data = quote_service.negotiate_draft(quote_id, seller_email=seller_email)
         return {"statusCode": 200, "message": "OK", "data": data}
@@ -211,7 +259,8 @@ def create_draft(quote_id: str):
 @tracer.capture_method
 def send_invoice(quote_id: str):
     try:
-        _require_negotiator()
+        user = _require_negotiator()
+        _ensure_quote_in_scope(quote_id, user)
         data = quote_service.send_invoice(quote_id)
         return {"statusCode": 200, "message": "OK", "data": data}
     except LookupError as e:
@@ -229,7 +278,8 @@ def send_invoice(quote_id: str):
 @tracer.capture_method
 def complete_quote(quote_id: str):
     try:
-        _require_negotiator()
+        user = _require_negotiator()
+        _ensure_quote_in_scope(quote_id, user)
         data = quote_service.complete(quote_id)
         return {"statusCode": 200, "message": "OK", "data": data}
     except LookupError as e:
@@ -247,7 +297,8 @@ def complete_quote(quote_id: str):
 @tracer.capture_method
 def patch_quote(quote_id: str):
     try:
-        _require_negotiator()
+        user = _require_negotiator()
+        _ensure_quote_in_scope(quote_id, user)
         body = app.current_event.json_body
         if not isinstance(body, dict):
             body = {}
@@ -268,7 +319,8 @@ def patch_quote(quote_id: str):
 @tracer.capture_method
 def get_shipping_rates(quote_id: str):
     try:
-        _require_negotiator()
+        user = _require_negotiator()
+        _ensure_quote_in_scope(quote_id, user)
         auth_header = (app.current_event.headers or {}).get("authorization") or (app.current_event.headers or {}).get("Authorization") or ""
         data = quote_service.get_shipping_rates(quote_id, auth_header)
         return {"statusCode": 200, "message": "OK", "data": data}

@@ -1,8 +1,11 @@
 """Logs de errores del frontend: POST autenticado (guarda) + GET SUPERADMIN (lista)."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+import hmac
 
 from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
@@ -44,12 +47,27 @@ tracer = Tracer()
 app = APIGatewayHttpResolver()
 _svc = ErrorLogService()
 
+# Permite registrar eventos de expiración de sesión sin Bearer válido (el propio
+# motivo del reporte es que ya no queda un access token utilizable). Restringido
+# a un tipo de evento fijo, forzado del lado del servidor — nunca confiar en lo
+# que mande el cliente por esta vía.
+_SESSION_EVENTS_API_KEY = os.environ.get("ERROR_LOGS_SESSION_EVENTS_API_KEY", "")
+
 
 def _headers_dict() -> dict[str, str]:
     raw = app.current_event.headers
     if not raw:
         return {}
     return {str(k): (v if v is not None else "") for k, v in raw.items()}
+
+
+def _matches_session_events_api_key(headers: dict[str, str]) -> bool:
+    if not _SESSION_EVENTS_API_KEY:
+        return False
+    provided = headers.get("x-api-key") or headers.get("X-Api-Key")
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, _SESSION_EVENTS_API_KEY)
 
 
 def _require_authenticated_user() -> dict:
@@ -65,9 +83,22 @@ def _require_authenticated_user() -> dict:
 @app.post("/api/v1/error-logs")
 @tracer.capture_method
 def create_error_log():
-    user = _require_authenticated_user()
+    headers = _headers_dict()
+    is_session_event = _matches_session_events_api_key(headers)
+    user = (
+        {"id": None, "email": None, "role": "SESSION_EVENT"}
+        if is_session_event
+        else _require_authenticated_user()
+    )
     try:
         body = app.current_event.json_body or {}
+        if is_session_event:
+            body = dict(body)
+            context = dict(body.get("context") or {})
+            tags = dict(context.get("tags") or {})
+            tags["kind"] = "session_expired"
+            context["tags"] = tags
+            body["context"] = context
         data = _svc.create(body, user)
         return {"statusCode": 201, "message": "Log registrado", "data": data}
     except ValueError as e:

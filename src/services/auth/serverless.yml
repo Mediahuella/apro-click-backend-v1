@@ -56,6 +56,13 @@ functions:
           path: /api/v1/auth/login
           method: post
 
+  refresh:
+    handler: handlers/auth.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/auth/refresh
+          method: post
+
   changeFirstTimePassword:
     handler: handlers/auth.lambda_handler
     events:

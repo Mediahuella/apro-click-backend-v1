@@ -29,7 +29,7 @@ Lee y sigue **`AGENTS.md`** en la raíz: requisitos, estructura completa, lista 
 
 ## Cognito y Shopify
 
-- **Cognito**: el módulo compartido `src/shared/cognito/client.py` envuelve `boto3.cognito-idp` con helpers para `admin_*` y para los flujos de auth (login, change password, forgot/confirm, logout). Usarlo desde los servicios en lugar de `boto3` directo.
+- **Cognito**: el módulo compartido `src/shared/cognito/client.py` envuelve `boto3.cognito-idp` con helpers para `admin_*` y para los flujos de auth (login, refresh, change password, forgot/confirm, logout). Usarlo desde los servicios en lugar de `boto3` directo. El refresh (`POST /api/v1/auth/refresh`, servicio `auth`) usa `admin_initiate_auth` con `AuthFlow=REFRESH_TOKEN_AUTH`; Cognito no rota el refresh token en ese flujo.
 - **Roles API** (mayúsculas): `SUPERADMIN`, `ADMIN`, `SALES`, `KPI_VISUALIZERS`. **Grupos Cognito** (minúsculas): `superadmin`, `admin`, `sales`, `kpi_visualizers`. **Estados**: `ACTIVE | DISABLED | PENDING`.
 - **Shopify Admin API**: versión por defecto `2026-04` (override con `SHOPIFY_API_VERSION`). OAuth en `shopify`, pedidos+inventario en `orders`, listas B2B en `prices`, CarrierService en `shipping`. Token offline para scripts: `SHOPIFY_SHOP` + `SHOPIFY_ADMIN_TOKEN`.
 

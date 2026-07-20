@@ -4,3 +4,6 @@ psycopg2-binary>=2.9
 alembic>=1.13
 # Pre-procesamiento del Excel del cotizador (scripts/build_shipping_data.py)
 openpyxl>=3.1
+# Tests (ej. src/services/quotes/tests/test_apro_ia_webhook.py)
+pytest>=8.0
+aws-lambda-powertools>=3.0
