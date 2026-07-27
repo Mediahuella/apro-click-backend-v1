@@ -110,3 +110,6 @@ functions:
       - httpApi:
           path: /api/v1/storefront/company/addresses/{address_id}
           method: delete
+      - httpApi:
+          path: /api/v1/storefront/company/contacts
+          method: get

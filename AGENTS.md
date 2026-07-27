@@ -112,6 +112,7 @@ Cada subdirectorio de `src/services/` es un stack Serverless independiente (un `
 | `chat` | `apro-click-admin-chat` | API HTTP del chat |
 | `chat-ws` | `apro-click-admin-chat-ws` | **WebSocket API** + **DynamoDB** `ws-connections` (TTL + GSI por conversación) |
 | `error-logs` | `apro-click-admin-error-logs` | Logs de errores del frontend. **DynamoDB** `error-logs` (PK `LOG` + SK `<ISO>#<uid>`, TTL 30 días). `POST /api/v1/error-logs` autenticado (adjunta usuario del token); `GET` solo SUPERADMIN. Auth vía `utils/cognito_staff.py` (espejo de users/company-registration). |
+| `invoices` | `apro-click-admin-invoices` | Lista de facturas de la empresa por OC. `GET /api/v1/storefront/invoices?shopify_company_id=` (canal público storefront, `X-Api-Key` = `INVOICES_PUBLIC_API_KEY`) resuelve `Company.billing_rut`, toma las `QuoteRequest.apro_ia_folio` (folio OC) más recientes de la empresa (máx. 20) y consulta el DMS externo APRO (`dms.apro.cl`) en paralelo, mismo `APRO_IA_BEARER_TOKEN` que `quotes`/`company-registration`. Sin persistencia propia (proxy de lectura). |
 
 **Dependencias entre stacks (CloudFormation `Fn::ImportValue`):** el stack `users` exporta `cognito-user-pool-id`, `cognito-user-pool-arn` y `cognito-app-client-id`. El stack `notifications` exporta `notifications-queue-url` y `notifications-queue-arn`. En un entorno nuevo **`users` y `notifications` deben deployarse antes que el resto**.
 

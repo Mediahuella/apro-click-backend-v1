@@ -1009,11 +1009,14 @@ def _sync_apro_ia_and_pdf(
 
     try:
         if quote.apro_ia_folio:
-            apro_ia_client.editar_cotizacion(
+            data = apro_ia_client.editar_cotizacion(
                 quote.apro_ia_folio,
                 productos=productos,
                 comment=quote.comment,
             )
+            if data.get("status"):
+                quote.apro_ia_status = data["status"]
+                session.flush()
         else:
             if not seller_email:
                 raise RuntimeError("seller_email requerido para crear en APRO IA")
@@ -1030,6 +1033,8 @@ def _sync_apro_ia_and_pdf(
             quote.apro_ia_folio = data["folio"]
             # El folio de APRO IA es el número oficial de la cotización en todo el sistema.
             quote.folio = data["folio"]
+            if data.get("status"):
+                quote.apro_ia_status = data["status"]
             session.flush()
 
         pdf_bytes = apro_ia_client.descargar_pdf(quote.apro_ia_folio)

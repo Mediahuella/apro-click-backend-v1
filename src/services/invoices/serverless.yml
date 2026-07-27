@@ -1,0 +1,50 @@
+service: apro-click-admin-invoices
+frameworkVersion: '4'
+
+useDotenv: true
+
+custom:
+  serviceSlug: invoices
+  pythonRequirements: ${file(../../serverless.pythonRequirements.yml):pythonRequirements}
+
+package: ${file(../../serverless.package.yml):package}
+
+provider:
+  name: aws
+  runtime: python3.13
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+  memorySize: 512
+  timeout: 28
+  layers:
+    - { Ref: PythonRequirementsLambdaLayer }
+    - 'arn:aws:lambda:${self:provider.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-x86_64:27'
+  httpApi:
+    cors: true
+    payload: '2.0'
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    # Clave compartida con el theme app extension (header X-Api-Key) para el
+    # GET público de storefront (consulta de facturas por OC).
+    INVOICES_PUBLIC_API_KEY: ${env:INVOICES_PUBLIC_API_KEY, ''}
+    # DMS externo APRO (dms.apro.cl) — consulta de facturas/recepciones por OC.
+    DMS_INVOICES_BASE_URL: ${env:DMS_INVOICES_BASE_URL, 'https://dms.apro.cl'}
+    # Mismo token Bearer que usan los servicios quotes/company-registration (distinto host, mismo DMS).
+    APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
+
+functions:
+  health:
+    handler: handlers/health.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/health-${self:custom.serviceSlug}
+          method: get
+
+  invoices:
+    handler: handlers/invoices.lambda_handler
+    events:
+      - httpApi:
+          path: /api/v1/storefront/invoices
+          method: get

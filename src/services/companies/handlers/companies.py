@@ -162,6 +162,27 @@ def storefront_delete_address(address_id: str):
         raise InternalServerError("Error eliminando sucursal")
 
 
+@app.get("/api/v1/storefront/company/contacts")
+@tracer.capture_method
+def storefront_list_contacts():
+    try:
+        require_companies_public_api_key(_headers_dict())
+        company_id = _resolve_storefront_company_id(
+            _params().get("shopify_company_id", "")
+        )
+        result = contact_service.list_contacts(company_id)
+        return {"statusCode": 200, "message": "OK", "data": result}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error listando contactos (storefront)")
+        raise InternalServerError("Error listando contactos")
+
+
 @app.post("/api/v1/companies")
 @tracer.capture_method
 def create_company():
