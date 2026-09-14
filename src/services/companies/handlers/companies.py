@@ -35,6 +35,11 @@ for path in possible_shared_paths:
 from services.address_service import AddressService
 from services.company_service import CompanyService
 from services.contact_service import ContactService
+from utils.cognito_access import (
+    get_user_by_cognito_access_token,
+    parse_bearer_authorization,
+)
+from apro.credit_client import consultar_credito, esta_configurado
 from utils.public_api_key import require_companies_public_api_key
 
 logger = Logger()
@@ -56,6 +61,23 @@ def _params() -> dict[str, str]:
     return app.current_event.query_string_parameters or {}
 
 
+
+def _require_panel_user() -> dict:
+    """Exige ``Authorization: Bearer`` con un access token válido del panel.
+
+    Las rutas de panel no tienen authorizer en API Gateway: sin esta guarda
+    respondían 200 a cualquiera que conociera la URL del API. No filtra por rol
+    —eso lo resuelve cada vista— solo verifica que haya una sesión activa.
+    """
+    token = parse_bearer_authorization(_headers_dict())
+    if not token:
+        raise UnauthorizedError("Se requiere Authorization: Bearer con access token")
+    try:
+        return get_user_by_cognito_access_token(token)
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+
+
 def _resolve_storefront_company_id(shopify_company_id: str) -> str:
     """Resuelve el UUID interno de ``Company`` a partir de ``shopify_company_id``.
 
@@ -69,6 +91,65 @@ def _resolve_storefront_company_id(shopify_company_id: str) -> str:
     if not company:
         raise NotFoundError("Empresa no encontrada")
     return company["id"]
+
+
+# ---------------------------------------------------------------------------
+# Storefront público — crédito de la empresa (checkout UI extension)
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/storefront/company/credit")
+@tracer.capture_method
+def storefront_company_credit():
+    """Condiciones de crédito de la empresa B2B logueada, para el checkout.
+
+    Lo consume la checkout UI extension ``credito-b2b`` cuando el comprador
+    elige pagar con crédito. Devuelve:
+
+    - ``enabled``: si la empresa tiene crédito autorizado. **Es el CRM**
+      (``payment_type``), la misma fuente que el metafield que usa la Function
+      para mostrar u ocultar el medio de pago — así el banner nunca contradice
+      lo que el comprador ve en la lista de pagos.
+    - ``credit_folio``: el folio del crédito en el DMS de APRO (``CR-NNNNNN``),
+      cuando se puede consultar. Es informativo.
+    - ``limit`` / ``available`` / ``currency``: **siempre ``null``**. El
+      servicio de créditos de APRO (``GET /credits/client/{rut}``) informa la
+      existencia del crédito, no el cupo; si algún día publican montos, estas
+      claves ya están en el contrato y la extension del checkout las muestra
+      sola. Mientras tanto el banner explica las condiciones sin cifras.
+
+    La empresa se resuelve por ``shopify_company_id`` de la sesión B2B; el RUT
+    con que se consulta el DMS sale de la BD, nunca del cliente.
+    """
+    try:
+        require_companies_public_api_key(_headers_dict())
+        shopify_company_id = str(_params().get("shopify_company_id", "")).strip()
+        if not shopify_company_id:
+            raise BadRequestError("shopify_company_id es obligatorio")
+        company = company_service.get_company_by_shopify_id(shopify_company_id)
+        if not company:
+            raise NotFoundError("Empresa no encontrada")
+
+        enabled = str(company.get("payment_type") or "").upper() == "CREDIT"
+        credito = consultar_credito(company.get("billing_rut") or "") if enabled else None
+        data = {
+            "enabled": enabled,
+            "company_name": company.get("name"),
+            "credit_folio": (credito or {}).get("folio"),
+            "limit": None,
+            "available": None,
+            "currency": "CLP",
+            "source": "apro" if credito else "crm",
+            "quota_configured": esta_configurado(),
+        }
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error resolviendo el crédito de la empresa (storefront)")
+        raise InternalServerError("Error resolviendo el crédito de la empresa")
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +267,7 @@ def storefront_list_contacts():
 @app.post("/api/v1/companies")
 @tracer.capture_method
 def create_company():
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         name = body.get("name")
@@ -214,18 +296,26 @@ def create_company():
 @app.get("/api/v1/companies")
 @tracer.capture_method
 def list_companies():
+    _require_panel_user()
     try:
         params = app.current_event.query_string_parameters or {}
         limit = int(params.get("limit", "50"))
         offset = int(params.get("offset", "0"))
         assigned_user_id = params.get("assigned_user_id") or None
         referred_by_user_id = params.get("referred_by_user_id") or None
+        q = params.get("q") or None
+        exclude_system = str(params.get("exclude_system", "")).lower() in {
+            "1",
+            "true",
+        }
 
         result = company_service.list_companies(
             limit=limit,
             offset=offset,
             assigned_user_id=assigned_user_id,
             referred_by_user_id=referred_by_user_id,
+            q=q,
+            exclude_system=exclude_system,
         )
         return {"statusCode": 200, "message": "Companies retrieved", "data": result}
 
@@ -239,6 +329,7 @@ def list_companies():
 @app.get("/api/v1/companies/<company_id>")
 @tracer.capture_method
 def get_company(company_id: str):
+    _require_panel_user()
     try:
         result = company_service.get_company(company_id)
         if not result:
@@ -257,6 +348,7 @@ def get_company(company_id: str):
 @app.put("/api/v1/companies/<company_id>")
 @tracer.capture_method
 def update_company(company_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         if not body:
@@ -275,6 +367,7 @@ def update_company(company_id: str):
 @app.put("/api/v1/companies/<company_id>/assigned-user")
 @tracer.capture_method
 def set_company_assigned_user(company_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         user_id = body.get("user_id") or None
@@ -292,6 +385,7 @@ def set_company_assigned_user(company_id: str):
 @app.delete("/api/v1/companies/<company_id>")
 @tracer.capture_method
 def delete_company(company_id: str):
+    _require_panel_user()
     try:
         company_service.delete_company(company_id)
         return {"statusCode": 200, "message": "Company deleted"}
@@ -306,6 +400,7 @@ def delete_company(company_id: str):
 @app.get("/api/v1/companies/<company_id>/addresses")
 @tracer.capture_method
 def list_company_addresses(company_id: str):
+    _require_panel_user()
     try:
         result = address_service.list_addresses(company_id)
         return {"statusCode": 200, "message": "Addresses retrieved", "data": result}
@@ -319,6 +414,7 @@ def list_company_addresses(company_id: str):
 @app.post("/api/v1/companies/<company_id>/addresses")
 @tracer.capture_method
 def create_company_address(company_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         result = address_service.create_address(company_id, body)
@@ -335,6 +431,7 @@ def create_company_address(company_id: str):
 @app.get("/api/v1/companies/<company_id>/addresses/<address_id>")
 @tracer.capture_method
 def get_company_address(company_id: str, address_id: str):
+    _require_panel_user()
     try:
         result = address_service.get_address(company_id, address_id)
         if not result:
@@ -352,6 +449,7 @@ def get_company_address(company_id: str, address_id: str):
 @app.put("/api/v1/companies/<company_id>/addresses/<address_id>")
 @tracer.capture_method
 def update_company_address(company_id: str, address_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         if not body:
@@ -370,6 +468,7 @@ def update_company_address(company_id: str, address_id: str):
 @app.delete("/api/v1/companies/<company_id>/addresses/<address_id>")
 @tracer.capture_method
 def delete_company_address(company_id: str, address_id: str):
+    _require_panel_user()
     try:
         address_service.delete_address(company_id, address_id)
         return {"statusCode": 200, "message": "Address deleted"}
@@ -385,6 +484,7 @@ def delete_company_address(company_id: str, address_id: str):
 @app.get("/api/v1/companies/<company_id>/contacts")
 @tracer.capture_method
 def list_company_contacts(company_id: str):
+    _require_panel_user()
     try:
         result = contact_service.list_contacts(company_id)
         return {"statusCode": 200, "message": "Contacts retrieved", "data": result}
@@ -398,6 +498,7 @@ def list_company_contacts(company_id: str):
 @app.post("/api/v1/companies/<company_id>/contacts")
 @tracer.capture_method
 def create_company_contact(company_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         result = contact_service.create_contact(company_id, body)
@@ -414,6 +515,7 @@ def create_company_contact(company_id: str):
 @app.get("/api/v1/companies/<company_id>/contacts/<client_id>")
 @tracer.capture_method
 def get_company_contact(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         result = contact_service.get_contact(company_id, client_id)
         if not result:
@@ -431,6 +533,7 @@ def get_company_contact(company_id: str, client_id: str):
 @app.put("/api/v1/companies/<company_id>/contacts/<client_id>")
 @tracer.capture_method
 def update_company_contact(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         if not body:
@@ -449,6 +552,7 @@ def update_company_contact(company_id: str, client_id: str):
 @app.delete("/api/v1/companies/<company_id>/contacts/<client_id>")
 @tracer.capture_method
 def delete_company_contact(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         contact_service.delete_contact(company_id, client_id)
         return {"statusCode": 200, "message": "Contact removed"}
@@ -464,6 +568,7 @@ def delete_company_contact(company_id: str, client_id: str):
 @app.post("/api/v1/companies/<company_id>/contacts/<client_id>/main")
 @tracer.capture_method
 def set_company_main_contact(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         result = contact_service.set_main_contact(company_id, client_id)
         return {"statusCode": 200, "message": "Main contact updated", "data": result}
@@ -479,6 +584,7 @@ def set_company_main_contact(company_id: str, client_id: str):
 @app.get("/api/v1/companies/<company_id>/contacts/<client_id>/locations")
 @tracer.capture_method
 def list_contact_locations(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         result = contact_service.list_contact_locations(company_id, client_id)
         return {"statusCode": 200, "message": "Locations retrieved", "data": result}
@@ -494,6 +600,7 @@ def list_contact_locations(company_id: str, client_id: str):
 @app.put("/api/v1/companies/<company_id>/contacts/<client_id>/locations")
 @tracer.capture_method
 def set_contact_locations(company_id: str, client_id: str):
+    _require_panel_user()
     try:
         body = app.current_event.json_body or {}
         address_ids = body.get("address_ids")

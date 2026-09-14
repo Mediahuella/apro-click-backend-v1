@@ -427,3 +427,68 @@ def notify_cotizacion_apro_ia_estado(
         cta=("Revisar en el panel", f"{ADMIN_PANEL_URL}/quotes/{quote_id}"),
     )
     _enviar(admin_emails, subject, html)
+
+
+def notify_transferencia_estado(
+    admin_emails: list[str],
+    company_name: str,
+    folio: str,
+    quote_id: str,
+    transfer_folio: str,
+    estado: str,
+    status: str,
+    payment_method: str = "transferencia",
+) -> None:
+    """Notifica a SALES/admins el resultado de un pago reportado por APRO IA.
+
+    Sirve a los dos medios que confirma el DMS: ``transferencia`` y
+    ``credito``. El flujo es el mismo; solo cambian los textos.
+    """
+    if not admin_emails:
+        return
+    aprobada = estado == "APROBADA"
+    credito = payment_method == "credito"
+    medio = "Crédito" if credito else "Transferencia"
+    medio_min = "crédito" if credito else "transferencia"
+    subject = (
+        f"{medio} recibido — pedido de {folio} marcado como pagado"
+        if aprobada
+        else f"{medio} {status.lower()} — pedido de {folio} pendiente de pago"
+    )
+    preheader = f"{company_name} — {folio}: {medio_min} {status}"
+    accent = "#1a7f37" if aprobada else "#b42318"
+    participio = "aprobado" if credito else "aprobada"
+    titulo = f"{medio} {participio}" if aprobada else f"{medio} no {participio}"
+    tag_rechazo = "credito-rechazado" if credito else "transferencia-rechazada"
+    detalle = (
+        "El pedido en Shopify quedó marcado como <strong>pagado</strong> y "
+        f"etiquetado como <em>{medio_min}</em>."
+        if aprobada
+        else "El pedido en Shopify <strong>no se anuló</strong>: sigue abierto y "
+        f"<strong>pendiente de pago</strong>, etiquetado como <em>{tag_rechazo}</em>. "
+        "La cotización quedó en <strong>Pago rechazado</strong> en el panel — hay "
+        "que hacerle seguimiento o anularla a mano si el cliente no vuelve a pagar."
+    )
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        {titulo}
+      </h1>
+      <p style="margin:0 0 20px 0;color:{TEXT_MUTED};">{detalle}</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px;">
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Empresa</td>
+            <td style="padding:6px 4px;font-weight:600;">{company_name}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Cotización</td>
+            <td style="padding:6px 4px;font-weight:600;">{folio}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Folio {medio_min}</td>
+            <td style="padding:6px 4px;font-weight:600;">{transfer_folio or '—'}</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Estado APRO IA</td>
+            <td style="padding:6px 4px;font-weight:600;color:{accent};">{status}</td></tr>
+      </table>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Revisar en el panel", f"{ADMIN_PANEL_URL}/quotes/{quote_id}"),
+    )
+    _enviar(admin_emails, subject, html)

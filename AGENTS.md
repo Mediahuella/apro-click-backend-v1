@@ -53,6 +53,7 @@ backend-v1/
 │   ├── sync_stock_bulk.py    # npm run sync:stock / sync:stock:all / sync:stock:dry
 │   ├── rebuild_catalogs.py   # Reconstruye Catalogs B2B en Shopify por segmento
 │   └── backfill_company_contacts.py  # Enlaza mainContact a empresas Shopify sin contacto principal
+│   └── backfill_order_payment_gateways.py  # Completa el medio de pago de pedidos previos a la 027
 ├── src/
 │   ├── serverless.provider.yml          # Provider base (runtime, layers, httpApi, CORS)
 │   ├── serverless.package.yml           # Patrones de empaquetado por servicio
@@ -106,7 +107,7 @@ Cada subdirectorio de `src/services/` es un stack Serverless independiente (un `
 | `orders` | `apro-click-admin-orders` | CRUD pedidos, webhooks Shopify (pedidos + inventario) + **SQS FIFO** `inventory-stock-sync` |
 | `prices` | `apro-click-admin-prices` | Upload Excel listas de precio B2B + worker SQS + **S3** bucket de uploads |
 | `shipping` | `apro-click-admin-shipping` | Cotización envíos + Shopify CarrierService callback + registro |
-| `quotes` | `apro-click-admin-quotes` | Cotizaciones (handlers de negocio) |
+| `quotes` | `apro-click-admin-quotes` | Cotizaciones B2B (RFQ, Draft Orders negociados, PDF). Incluye dos webhooks del DMS APRO IA con la misma `APRO_IA_WEBHOOK_API_KEY`: `POST /api/v1/quotes/webhooks/apro-ia` (estado de aprobación gerencial → `apro_ia_status`, `docs/Webhook eventos.md`) y `POST /api/v1/quotes/webhooks/apro-ia/transferencias` (pago por transferencia → crea el pedido si falta y lo marca pagado, o anula la cotización; `docs/Transferencias APRO IA.md`). Ojo: `complete` deja el pedido **impago** (`paymentPending`) — el pago lo registra el webhook de transferencias. |
 | `leads` | `apro-click-admin-leads` | Leads (placeholder + health) |
 | `notifications` | `apro-click-admin-notifications` | Cola SQS `NotificationsQueue` + worker Lambda `emailWorker` (SES). Dueño del envío de emails de la plataforma. |
 | `chat` | `apro-click-admin-chat` | API HTTP del chat |
@@ -173,6 +174,12 @@ El form público de registro lo reenvía como `referral_code` en el body. `Regis
 - Editar el email de un contacto (`update_contact`) **no** usa `customerUpdate` de Shopify (el email es el login del Customer) — resuelve/crea el Customer del nuevo email y reasigna el `CompanyContact`, desvinculando el anterior.
 - `GET /api/v1/companies/{company_id}/contacts/{client_id}` (individual) existe igual que para addresses.
 - **Canal público storefront** (autogestión desde `aproclick-connector`): `GET/POST/PUT/DELETE /api/v1/storefront/company/addresses[/{address_id}]`, autenticado con header `X-Api-Key` (`COMPANIES_PUBLIC_API_KEY`, mismo patrón que `QUOTES_PUBLIC_API_KEY`). Nunca acepta el UUID interno de `Company`: resuelve `company_id` a partir de `shopify_company_id` (`CompanyService.get_company_by_shopify_id`) — el storefront solo conoce el GID de Shopify de su propia sesión B2B (`customer.current_company.id`). Delega en `AddressService` ya existente, heredando automáticamente las protecciones de unicidad/borrado.
+
+**Crédito B2B en el checkout** — `Company.payment_type` (`DIRECT`/`CREDIT`) ya no es solo informativo del CRM: es lo que habilita el medio de pago con crédito en el checkout de Shopify.
+
+- El puente es el metafield **`aproclick.credito`** (boolean) de la Company B2B: una Shopify Function no puede llamar a la API, solo lee su input query. Lo escribe `utils/shopify_credit_sync.py` desde `update_company` (si cambió `payment_type`) y `company-registration` al aprobar una solicitud (`_sync_new_company_credit` → `utils/shopify_customers.set_company_credit_metafield`). Ninguno bloquea: si Shopify falla se loguea warning y se repone con `scripts/backfill_company_credit_metafield.py`.
+- **Falla cerrada**: sin metafield, la Function del connector oculta el crédito. Un backfill pendiente nunca habilita crédito de más.
+- `GET /api/v1/storefront/company/credit?shopify_company_id=` (canal público, `COMPANIES_PUBLIC_API_KEY`) devuelve `{enabled, limit, available, currency, source}`: `enabled` sale del CRM (misma fuente que el metafield, para que el banner del checkout no contradiga la lista de pagos) y los montos del DMS de APRO vía `utils/apro_credit_client.py`. **El contrato del endpoint de cupo está pendiente de confirmar con APRO IA**: con `APRO_IA_CREDIT_BASE_URL` vacío responde `source: "crm"` y montos `null` en vez de fallar. Detalle en `docs/CREDITO_B2B_CHECKOUT.md`.
 
 ### Conexión
 
@@ -305,6 +312,7 @@ Ejecutar desde la raíz de `backend-v1/` (requieren `.env` con `DATABASE_URL` y 
 
 | Script | Uso |
 |--------|-----|
+| `python3 scripts/backfill_order_payment_gateways.py` | Completa `shopify_orders.payment_gateway_names` (migración `027`) en pedidos anteriores, consultando `paymentGatewayNames` a Shopify en lotes de 50. `--dry-run` primero; `--all` reprocesa los ya poblados. Shopify no expone pedidos de más de 60 días sin el scope `read_all_orders`, así que los más viejos quedan sin dato. |
 | `python3 scripts/rebuild_catalogs.py` | Reconstruye Catalogs B2B para uno o todos los segmentos (PYME / MEDIANA / GRAN_EMPRESA). Útil cuando hay empresas aprobadas sin catálogo. `--dry-run` para solo ver estado. |
 | `python3 scripts/backfill_company_contacts.py` | Detecta empresas Shopify sin `mainContact` y lo corrige. Soporta `--dry-run` y `--company-id <id>` para procesar una sola empresa. |
 | `python3 scripts/notify_approved_backfill.py` | Encola emails de aprobación (y opcionalmente rechazo) para `company_registration_requests` que nunca fueron notificadas (`approval_notified_at IS NULL`). Idempotente: una segunda corrida no reenvía. **Siempre empezar con `--dry-run`.** Resuelve la cola SQS vía CFN export `apro-click-<stage>-notifications-queue-url` o flag `--queue-url`. Útil tras habilitar SES por primera vez. |
@@ -319,6 +327,7 @@ Ejecutar desde la raíz de `backend-v1/` (requieren `.env` con `DATABASE_URL` y 
 - Sesiones DB: `with get_session() as session:` + `session.commit()` explícito. **No** dejar sesiones abiertas entre invocaciones.
 - Cognito: usar `shared/cognito/client.py` (no boto3 directo) para mantener helpers consistentes.
 - Notificaciones por email: usar `shared/notifications/sqs_publisher.py` (`encolar_nueva_solicitud`, `encolar_aprobacion`, `encolar_rechazo`) en lugar de llamar SES directamente. El servicio `notifications` es el único dueño de las credenciales SES. Para agregar un nuevo tipo: añadir `notify_xxx()` en `shared/notifications/ses_email.py`, registrarlo en `_HANDLERS` de `notifications/handlers/email_worker.py`, correr `npm run shared:sync`, redeploy `notifications`.
+- Tests: `python3 -m pytest src` corre todo, y `python3 -m pytest src/services/<servicio>/tests` una suite. Cada carpeta de tests necesita el `conftest.py` que aísla el `sys.path` del servicio: los paquetes `utils`/`services`/`handlers` existen con el mismo nombre en varios servicios y, sin él, el primero colectado tapa a los demás. Al agregar tests a un servicio nuevo, copiar ese `conftest.py`.
 - Paginación: `offset` + `limit` (no `last_evaluated_key` de DynamoDB).
 - Respuestas HTTP API: payload 2.0; CORS abierto en `httpApi` (provider base) para desarrollo.
 - Versión Shopify Admin API por defecto: `2026-04` (overridable con `SHOPIFY_API_VERSION`).

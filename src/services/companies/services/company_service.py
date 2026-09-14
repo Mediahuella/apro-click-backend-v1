@@ -1,7 +1,9 @@
 """Company business-logic service — PostgreSQL via SQLAlchemy."""
 from __future__ import annotations
 
+import re
 import sys
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any
@@ -33,11 +35,49 @@ from database.models.conversation import Conversation
 from database.models.registration_request import CompanyRegistrationRequest
 from database.models.user import User
 from database.models.user_company import UserCompany
-from sqlalchemy import delete, select, update, or_
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 from utils.shopify_catalog_sync import sync_company_catalog
+from utils.shopify_credit_sync import sync_company_credit_metafield
 
 logger = Logger()
+
+
+def _normalize_rut(value: str | None) -> str:
+    """Deja solo dígitos y el dígito verificador ``K`` (sin puntos ni guión)."""
+    return re.sub(r"[^0-9kK]", "", value or "").upper()
+
+
+
+# Similitud mínima (0-1) para que un nombre mal tipeado cuente como match.
+# 0.5 deja pasar ``comerzializadora`` → ``COMERCIALIZADORA`` (0.7) sin traer ruido.
+_SIMILARITY_THRESHOLD = 0.5
+
+
+def _squeeze(expr):
+    """Colapsa espacios repetidos en SQL para comparar contra `_normalize_term`."""
+    return func.regexp_replace(expr, r"\s+", " ", "g")
+
+
+def _searchable(expr):
+    """Columna lista para comparar: minúsculas, sin acentos y sin espacios dobles."""
+    return _squeeze(func.unaccent(func.lower(expr)))
+
+
+def _normalize_term(value: str) -> str:
+    """Mismo tratamiento del lado del término buscado (sin acentos ni espacios dobles)."""
+    folded = unicodedata.normalize("NFKD", value or "")
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", folded).strip().lower()
+
+
+def _rut_sql_expression():
+    """``billing_rut`` normalizado en SQL, para comparar contra `_normalize_rut`."""
+    expr = func.upper(func.coalesce(Company.billing_rut, ""))
+    for separator in (".", "-", " "):
+        expr = func.replace(expr, separator, "")
+    return expr
+
 
 VALID_COMPANY_TYPES = {"SMALL", "MEDIUM", "BIG"}
 VALID_PAYMENT_TYPES = {"DIRECT", "CREDIT"}
@@ -91,14 +131,25 @@ class CompanyService:
         Usado por los endpoints públicos del storefront (canal ``X-Api-Key``):
         el cliente final solo conoce el GID de Shopify de su propia sesión B2B,
         nunca el UUID interno.
+
+        Acepta las **dos formas** en que llega ese identificador, porque
+        dependen del canal: el theme (Liquid) expone
+        ``customer.current_company.id`` **numérico** (``3740172472``) y el
+        checkout (``usePurchasingCompany().company.id``) devuelve el **GID**
+        completo. En BD se guarda numérico. Sin esta normalización, el canal
+        que manda GID recibe 404 aunque la empresa exista.
         """
         shopify_company_id = str(shopify_company_id or "").strip()
         if not shopify_company_id:
             return None
+        numerico = shopify_company_id.rsplit("/", 1)[-1] if shopify_company_id.startswith(
+            "gid://shopify/Company/"
+        ) else shopify_company_id
+        gid = f"gid://shopify/Company/{numerico}"
         with get_session() as session:
             company = session.scalar(
                 select(Company).where(
-                    Company.shopify_company_id == shopify_company_id
+                    Company.shopify_company_id.in_([numerico, gid])
                 )
             )
             return company.to_dict() if company else None
@@ -157,17 +208,22 @@ class CompanyService:
         offset: int = 0,
         assigned_user_id: str | None = None,
         referred_by_user_id: str | None = None,
+        q: str | None = None,
+        exclude_system: bool = False,
     ) -> dict[str, Any]:
-        """Lista empresas con dos filtros mutuamente compatibles:
+        """Lista empresas con filtros mutuamente compatibles:
 
         - `assigned_user_id`: cartera amplia — empresas vinculadas vía `UserCompany` M2M
           o por `companies.referred_by_user_id` (incluye asignaciones manuales del admin).
         - `referred_by_user_id`: estricto — sólo empresas captadas por el link de
           invitación del vendedor (`companies.referred_by_user_id == X`). Para el detalle
           del KPI de referidos donde no querés mezclar con asignación manual.
+        - `exclude_system`: oculta la empresa interna (`is_system`) para que el
+          `total` que pagina el panel coincida con lo que muestra la grilla.
+        - `q`: búsqueda por nombre, razón social o RUT. Va en el servidor porque el
+          panel filtraba en cliente sobre la página cargada (500 filas) y las
+          empresas más antiguas eran inbuscables aunque existieran.
         """
-        from sqlalchemy import select
-
         def _parse(name: str, raw: str | None) -> uuid.UUID | None:
             if not raw:
                 return None
@@ -196,10 +252,63 @@ class CompanyService:
                 )
             if referred_uuid is not None:
                 stmt = stmt.where(Company.referred_by_user_id == referred_uuid)
-            stmt = stmt.order_by(Company.created_at.desc()).limit(limit).offset(offset)
+            if exclude_system:
+                stmt = stmt.where(Company.is_system.is_(False))
+            # El término y las columnas se normalizan igual (minúsculas, sin
+            # acentos, sin espacios dobles): pegar un nombre con doble espacio
+            # (`R Y A  LIMITADA`) o sin tilde no debería perder la empresa.
+            term = _normalize_term(q or "")
+            similarity = None
+            exact_match = None
+            if term:
+                like = f"%{term}%"
+                exact_match = or_(
+                    _searchable(Company.name).like(like),
+                    _searchable(func.coalesce(Company.billing_razon_social, "")).like(
+                        like
+                    ),
+                )
+                conditions = [exact_match]
+                # El RUT se guarda con guión (``76217505-3``) pero el usuario lo
+                # tipea con puntos o sin nada: comparamos ambos lados sin separadores.
+                # Sin dígitos no es un RUT: ``huelpack`` normalizaría a ``K`` y
+                # traería por RUT toda empresa con dígito verificador K.
+                rut_term = _normalize_rut(term) if any(c.isdigit() for c in term) else ""
+                if rut_term:
+                    conditions.append(
+                        _rut_sql_expression().like(f"%{rut_term}%")
+                    )
+                # Tolerancia a errores de tipeo (pg_trgm): ``comerzializadora``
+                # encuentra ``COMERCIALIZADORA``. Solo para texto —un RUT mal
+                # tipeado no debe traer empresas parecidas.
+                if not rut_term:
+                    similarity = func.word_similarity(term, func.lower(Company.name))
+                    conditions.append(similarity >= _SIMILARITY_THRESHOLD)
+                stmt = stmt.where(or_(*conditions))
+            # Total con los mismos filtros pero sin paginar: el consumidor no
+            # puede deducirlo del largo de la página. El KPI del dashboard lo
+            # hacía y quedó clavado en el `limit` (500) al pasar las 500 empresas.
+            total = int(
+                session.scalar(
+                    select(func.count()).select_from(stmt.subquery())
+                )
+                or 0
+            )
+            if term:
+                # Primero las coincidencias literales, después las difusas por
+                # similitud; a igual relevancia, la más reciente.
+                order = [
+                    case((exact_match, 0), else_=1),
+                    similarity.desc() if similarity is not None else None,
+                    Company.created_at.desc(),
+                ]
+                stmt = stmt.order_by(*[o for o in order if o is not None])
+            else:
+                stmt = stmt.order_by(Company.created_at.desc())
+            stmt = stmt.limit(limit).offset(offset)
             companies = [c.to_dict() for c in session.scalars(stmt)]
             _attach_assigned_sales_user(session, companies)
-        return {"companies": companies}
+        return {"companies": companies, "total": total}
 
     def set_assigned_user(
         self, company_id: str, user_id: str | None
@@ -287,6 +396,7 @@ class CompanyService:
                 raise ValueError(f"Company '{company_id}' not found")
 
             old_company_type = company.company_type
+            old_payment_type = company.payment_type
             shopify_company_id = company.shopify_company_id
 
             for k, v in filtered.items():
@@ -299,6 +409,12 @@ class CompanyService:
         new_company_type = filtered.get("company_type")
         if new_company_type and new_company_type != old_company_type:
             sync_company_catalog(shopify_company_id, old_company_type, new_company_type)
+
+        # Habilitar/deshabilitar el pago con crédito en el checkout: la Function
+        # ``manejo-de-credito`` solo ve el metafield de la Company en Shopify.
+        new_payment_type = filtered.get("payment_type")
+        if new_payment_type and new_payment_type != old_payment_type:
+            sync_company_credit_metafield(shopify_company_id, new_payment_type)
 
         return result
 

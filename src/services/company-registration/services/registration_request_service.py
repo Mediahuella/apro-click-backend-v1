@@ -31,6 +31,7 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
+from apro.credit_client import consultar_credito  # noqa: E402
 from database.engine import get_session  # noqa: E402
 from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
@@ -54,8 +55,10 @@ from utils.shopify_customers import (  # noqa: E402
     ShopifyAPIError,
     add_locations_to_catalog,
     ensure_shopify_b2b_company,
+    es_error_customer_ya_asociado,
     format_shopify_api_error_detail,
     resolve_shop_and_token,
+    set_company_credit_metafield,
 )
 
 _COMPANY_TYPE_TO_SEGMENT: dict[str, str] = {
@@ -74,6 +77,73 @@ RUT_DUPLICADO_EXENTO = "76943201-9"
 # Vendedores "internos/dev" — sólo SUPERADMIN los ve en el KPI de referidos.
 # Mantener en minúsculas (comparación case-insensitive contra `users.email`).
 _REFERRAL_KPI_HIDDEN_EMAILS: frozenset[str] = frozenset({"zobekdev1@gmail.com"})
+
+
+def _payment_type_desde_apro(rut: str | None, payment_type_solicitado: str) -> str:
+    """``payment_type`` real de la empresa según el servicio de créditos de APRO.
+
+    APRO es la fuente de verdad del crédito, así que lo que haya pedido la
+    empresa en el formulario (o el admin al aprobar) es solo el valor por
+    defecto: si el DMS ya tiene un crédito vigente para el RUT, la empresa nace
+    con ``CREDIT``; si responde que no tiene, nace ``DIRECT``.
+
+    Si el DMS no se puede consultar se respeta lo solicitado: la aprobación no
+    puede quedar bloqueada por el DMS, y el job diario
+    (``companies/handlers/credit_sync.py``) corrige la empresa al día
+    siguiente.
+    """
+    if not rut:
+        return payment_type_solicitado
+    destino = None
+    try:
+        credito = consultar_credito(rut)
+        if credito is not None:
+            destino = "CREDIT" if credito.get("tiene_credito") else "DIRECT"
+    except Exception as e:  # noqa: BLE001 — nunca bloquea la aprobación
+        logger.warning("_payment_type_desde_apro: falló la consulta a APRO — %s", e)
+    if destino is None:
+        logger.info(
+            "Crédito indeterminado en APRO: se respeta lo solicitado",
+            extra={"rut": rut, "payment_type": payment_type_solicitado},
+        )
+        return payment_type_solicitado
+    if destino != payment_type_solicitado:
+        logger.info(
+            "payment_type ajustado por el crédito de APRO",
+            extra={"rut": rut, "solicitado": payment_type_solicitado, "apro": destino},
+        )
+    return destino
+
+
+def _sync_new_company_credit(
+    *,
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+    payment_type: str,
+) -> None:
+    """Escribe el metafield de crédito de la empresa recién creada en Shopify.
+
+    Es lo único que ve la Shopify Function ``manejo-de-credito`` en el checkout:
+    sin este metafield la empresa queda como *sin* crédito (falla cerrada). No
+    bloquea la aprobación — si falla, se repone con
+    ``scripts/backfill_company_credit_metafield.py``.
+    """
+    if not company_gid:
+        return
+    try:
+        set_company_credit_metafield(
+            shop_domain,
+            access_token,
+            company_gid,
+            has_credit=str(payment_type or "").strip().upper() == "CREDIT",
+        )
+    except Exception as e:  # noqa: BLE001 — nunca bloquea la aprobación
+        logger.warning(
+            "_sync_new_company_credit: no se pudo escribir aproclick.credito — %s",
+            e,
+            extra={"company_gid": company_gid, "payment_type": payment_type},
+        )
 
 
 def _sync_new_company_to_catalog(
@@ -425,15 +495,23 @@ class RegistrationRequestService:
             stmt = select(CompanyRegistrationRequest).order_by(
                 CompanyRegistrationRequest.created_at.desc()
             )
+            count_stmt = select(func.count()).select_from(CompanyRegistrationRequest)
             if db_status:
                 stmt = stmt.where(CompanyRegistrationRequest.status == db_status)
+                count_stmt = count_stmt.where(
+                    CompanyRegistrationRequest.status == db_status
+                )
             if company_uuid is not None:
                 stmt = stmt.where(
                     CompanyRegistrationRequest.resolved_company_id == company_uuid
                 )
+                count_stmt = count_stmt.where(
+                    CompanyRegistrationRequest.resolved_company_id == company_uuid
+                )
+            total = int(session.scalar(count_stmt) or 0)
             stmt = stmt.limit(limit).offset(offset)
             rows = list(session.scalars(stmt))
-        return {"requests": [_serialize_request(r) for r in rows]}
+        return {"requests": [_serialize_request(r) for r in rows], "total": total}
 
     def get_referral_stats(self, *, caller_role: str | None = None) -> dict[str, Any]:
         """KPI por vendedor (SALES + SUPERADMIN con referral_code).
@@ -592,6 +670,21 @@ class RegistrationRequestService:
             shopify_company_id = shopify_b2b["shopify_company_numeric_id"]
         except ShopifyAPIError as e:
             detail = format_shopify_api_error_detail(e)
+            # El handler convierte esto en 400 sin traza; logueamos aquí para poder
+            # diagnosticar la aprobación fallida desde CloudWatch.
+            logger.error(
+                "Fallo Shopify B2B aprobando solicitud %s (%s): %s",
+                request_id,
+                company_name,
+                detail,
+            )
+            if es_error_customer_ya_asociado(e):
+                raise ValueError(
+                    f"El contacto '{contact_email}' ya está asociado a otra empresa B2B "
+                    "en Shopify. Un cliente solo puede ser contacto de una empresa: "
+                    "usá un email distinto para el contacto de esta empresa, o quitá "
+                    "el contacto de la empresa anterior en Shopify antes de aprobar."
+                ) from e
             raise ValueError(
                 "No se pudo completar la empresa B2B en Shopify. "
                 f"Detalle: {detail}. "
@@ -613,6 +706,8 @@ class RegistrationRequestService:
 
             merged = canonical_shipping_payload(payload)
             billing_rut = (payload.get("rut") or "").strip() or None
+            # APRO manda sobre el crédito: lo solicitado es solo el default.
+            payment_type = _payment_type_desde_apro(billing_rut, payment_type)
 
             # billing_giro: override del admin tiene prioridad; si no, lo que envió la empresa.
             _giro_override = (billing_giro or "").strip()
@@ -714,6 +809,14 @@ class RegistrationRequestService:
             access_token=token,
             company_type=company_type,
             location_gids=shopify_b2b.get("shopify_company_location_gids") or [],
+        )
+
+        # Habilitar (o no) el pago con crédito en el checkout de la empresa.
+        _sync_new_company_credit(
+            shop_domain=shop,
+            access_token=token,
+            company_gid=str(shopify_b2b.get("shopify_company_gid") or ""),
+            payment_type=payment_type,
         )
 
         # Registrar el cliente en APRO IA (DMS externo).

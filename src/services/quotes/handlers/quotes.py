@@ -11,6 +11,13 @@
 - ``POST /api/v1/quotes/webhooks/apro-ia`` — webhook del DMS externo APRO IA
   (header ``x-api-key``); sincroniza ``apro_ia_status`` y avisa a SALES en
   aprobación/rechazo. Ver ``docs/Webhook eventos.md``.
+- ``POST /api/v1/quotes/webhooks/apro-ia/transferencias`` — webhook de
+  transferencias del mismo DMS (misma ``x-api-key``): marca el pedido como
+  pagado (creándolo desde el draft si aún no existía) o anula la cotización.
+  Ver ``docs/Transferencias APRO IA.md``.
+- ``POST /api/v1/quotes/webhooks/apro-ia/creditos`` — mismo payload y mismo
+  comportamiento que el anterior para los pagos con **crédito**; solo cambia
+  el tag con que queda marcado el pedido en Shopify (``credito``).
 """
 from __future__ import annotations
 
@@ -46,6 +53,7 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
+from services import apro_ia_client  # noqa: E402
 from services import quote_service  # noqa: E402
 from utils.cognito_quote_access import (  # noqa: E402
     NEGOTIATE_ROLES,
@@ -136,25 +144,127 @@ def create_quote():
 # ---------------------------------------------------------------------------
 # Webhook APRO IA — eventos de cotización (ver docs/Webhook eventos.md)
 # ---------------------------------------------------------------------------
-@app.post("/api/v1/quotes/webhooks/apro-ia")
-@tracer.capture_method
-def apro_ia_webhook():
+def _log_webhook_rechazado(ruta: str, motivo: str, error: Exception) -> None:
+    """Deja rastro de un webhook de APRO IA que no llegó a procesarse.
+
+    Sin esto, un 401 por ``x-api-key`` mala o un 400 por payload inválido se
+    va en silencio: la Lambda queda con un START/END mudo en CloudWatch y no
+    hay forma de saber si el emisor intentó algo. El body **no** se loguea
+    completo a propósito (puede traer datos del cliente); solo los campos
+    identificatorios del payload de transferencias.
+    """
+    body = {}
+    try:
+        raw = app.current_event.json_body
+        if isinstance(raw, dict):
+            body = raw
+    except Exception:  # noqa: BLE001 — body no-JSON: igual queremos el log
+        pass
+    logger.warning(
+        "Webhook APRO IA rechazado",
+        extra={
+            "ruta": ruta,
+            "motivo": motivo,
+            "error": str(error),
+            "tiene_api_key": bool(_get_header_value("x-api-key")),
+            "folio": body.get("folio"),
+            "order": body.get("order"),
+            "status": body.get("status"),
+        },
+    )
+
+
+def _get_header_value(nombre: str) -> str:
+    headers = _headers_dict() or {}
+    for k, v in headers.items():
+        if str(k).lower() == nombre:
+            return str(v or "")
+    return ""
+
+
+def _procesar_webhook_apro_ia(ruta: str, handler, env: str):
+    """Tronco común de los cuatro webhooks de APRO IA (eventos/transferencias × prod/QA).
+
+    El **ambiente se decide por la ruta**, no por la ``x-api-key``: APRO IA
+    configura las URLs ``/qa`` en su DMS de pruebas y las otras en producción.
+    Elegirlo por URL evita depender de que ellos puedan emitir una clave
+    distinta por ambiente y hace imposible que un evento de QA entre por la
+    ruta productiva.
+    """
     try:
         require_apro_ia_webhook_key(_headers_dict())
         body = app.current_event.json_body
         if not isinstance(body, dict):
             raise BadRequestError("Body inválido")
-        data = quote_service.handle_apro_ia_webhook(body)
+        data = handler(body, env=env)
         return {"statusCode": 200, "message": "OK", "data": data}
     except PermissionError as e:
+        _log_webhook_rechazado(ruta, "api_key", e)
         raise UnauthorizedError(str(e))
     except ValueError as e:
+        _log_webhook_rechazado(ruta, "payload", e)
         raise BadRequestError(str(e))
     except (BadRequestError, UnauthorizedError):
         raise
     except Exception:
-        logger.exception("Error procesando webhook APRO IA")
-        raise InternalServerError("Error procesando webhook APRO IA")
+        logger.exception("Error procesando webhook APRO IA", extra={"ruta": ruta})
+        raise InternalServerError(f"Error procesando webhook APRO IA ({ruta})")
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia/transferencias")
+@tracer.capture_method
+def apro_ia_transfer_webhook():
+    return _procesar_webhook_apro_ia(
+        "transferencias",
+        quote_service.handle_apro_ia_transfer_webhook,
+        apro_ia_client.ENV_PROD,
+    )
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia/qa/transferencias")
+@tracer.capture_method
+def apro_ia_transfer_webhook_qa():
+    return _procesar_webhook_apro_ia(
+        "transferencias-qa",
+        quote_service.handle_apro_ia_transfer_webhook,
+        apro_ia_client.ENV_QA,
+    )
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia/creditos")
+@tracer.capture_method
+def apro_ia_credit_webhook():
+    return _procesar_webhook_apro_ia(
+        "creditos",
+        quote_service.handle_apro_ia_credit_webhook,
+        apro_ia_client.ENV_PROD,
+    )
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia/qa/creditos")
+@tracer.capture_method
+def apro_ia_credit_webhook_qa():
+    return _procesar_webhook_apro_ia(
+        "creditos-qa",
+        quote_service.handle_apro_ia_credit_webhook,
+        apro_ia_client.ENV_QA,
+    )
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia")
+@tracer.capture_method
+def apro_ia_webhook():
+    return _procesar_webhook_apro_ia(
+        "eventos", quote_service.handle_apro_ia_webhook, apro_ia_client.ENV_PROD
+    )
+
+
+@app.post("/api/v1/quotes/webhooks/apro-ia/qa")
+@tracer.capture_method
+def apro_ia_webhook_qa():
+    return _procesar_webhook_apro_ia(
+        "eventos-qa", quote_service.handle_apro_ia_webhook, apro_ia_client.ENV_QA
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +293,7 @@ def list_quotes():
             user=user,
             shopify_company_id=shopify_company_id,
             status=params.get("status"),
+            q=params.get("q"),
             limit=limit,
             offset=offset,
         )

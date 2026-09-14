@@ -12,13 +12,15 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 import uuid
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 from aws_lambda_powertools import Logger
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 service_root = Path(__file__).resolve().parent.parent
@@ -45,6 +47,7 @@ from database.models.quote_request import (  # noqa: E402
     QuoteRequest,
     QuoteRequestLine,
 )
+from database.models.shopify_order import ShopifyOrder  # noqa: E402
 from database.models.user import User  # noqa: E402
 from database.models.user_company import UserCompany  # noqa: E402
 from shopify.store import resolve_store_token  # noqa: E402
@@ -53,6 +56,7 @@ from notifications.sqs_publisher import (  # noqa: E402
     encolar_cotizacion_apro_ia_estado,
     encolar_cotizacion_lista,
     encolar_nueva_cotizacion,
+    encolar_transferencia_estado,
 )
 from services import apro_ia_client  # noqa: E402
 from services import draft_order_service  # noqa: E402
@@ -101,6 +105,68 @@ def _enrich(d: dict[str, Any]) -> dict[str, Any]:
     if d.get("pdf_s3_key"):
         d["pdf_download_url"] = pdf_email_url(str(d.get("id")))
     return d
+
+
+def _attach_seller(session: Session, quotes: list[dict[str, Any]]) -> None:
+    """Añade ``assigned_sales_user`` (vendedor de la empresa) a cada cotización.
+
+    Usa la misma resolución canónica que el PDF y APRO IA: primero
+    ``Company.referred_by_user_id`` (empresa registrada con el link de invitación
+    de un vendedor) y, si no hay, el SALES de cartera en ``user_companies``.
+    Resuelto en batch para no pegarle N veces a la BD en el listado.
+    """
+    for q in quotes:
+        q["assigned_sales_user"] = None
+    company_ids = {
+        uuid.UUID(str(q["company_id"])) for q in quotes if q.get("company_id")
+    }
+    if not company_ids:
+        return
+
+    # 1) Vendedor referente por empresa (link de invitación).
+    referred_by_company: dict[str, uuid.UUID] = {}
+    for cid, ref_id in session.execute(
+        select(Company.id, Company.referred_by_user_id).where(
+            Company.id.in_(company_ids), Company.referred_by_user_id.is_not(None)
+        )
+    ).all():
+        referred_by_company[str(cid)] = ref_id
+
+    # 2) Vendedor de cartera (fallback) para las empresas sin referente.
+    fallback_ids = [
+        cid for cid in company_ids if str(cid) not in referred_by_company
+    ]
+    sales_by_company: dict[str, uuid.UUID] = {}
+    if fallback_ids:
+        for cid, uid in session.execute(
+            select(UserCompany.company_id, User.id)
+            .join(User, User.id == UserCompany.user_id)
+            .where(
+                UserCompany.company_id.in_(fallback_ids),
+                User.role == "SALES",
+                User.status == "ACTIVE",
+            )
+            .order_by(UserCompany.company_id, User.id)
+        ).all():
+            sales_by_company.setdefault(str(cid), uid)
+
+    user_ids = set(referred_by_company.values()) | set(sales_by_company.values())
+    if not user_ids:
+        return
+    users = {
+        u.id: {
+            "id": str(u.id),
+            "given_name": u.given_name,
+            "family_name": u.family_name,
+            "email": u.email,
+        }
+        for u in session.scalars(select(User).where(User.id.in_(user_ids))).all()
+    }
+    for q in quotes:
+        key = str(q.get("company_id") or "")
+        uid = referred_by_company.get(key) or sales_by_company.get(key)
+        if uid:
+            q["assigned_sales_user"] = users.get(uid)
 
 
 def _vendedor_name(session: Session, company: Company | None) -> str:
@@ -292,19 +358,71 @@ def _scope_filter(stmt, *, user: dict | None, shopify_company_id: str | None):
     return stmt
 
 
+def _searchable(expr):
+    """Columna lista para comparar: minúsculas, sin acentos y sin espacios dobles."""
+    return func.regexp_replace(
+        func.unaccent(func.lower(func.coalesce(expr, ""))), r"\s+", " ", "g"
+    )
+
+
+def _normalize_term(value: str) -> str:
+    """Mismo tratamiento del lado del término buscado."""
+    folded = unicodedata.normalize("NFKD", value or "")
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", folded).strip().lower()
+
+
+def _search_filter(stmt, term: str):
+    """Filtra por folio, folio APRO IA, empresa o solicitante.
+
+    Va en el servidor: el panel filtraba en cliente sobre la página cargada
+    (100 filas) y las cotizaciones más antiguas eran inbuscables por folio
+    aunque existieran. Los espacios repetidos se colapsan a ambos lados para
+    que un nombre pegado con doble espacio igual matchee.
+    """
+    like = f"%{term}%"
+
+    def _like(column):
+        return _searchable(column).like(like)
+
+    company_match = select(Company.id).where(
+        _searchable(Company.name).like(like),
+        Company.id == QuoteRequest.company_id,
+    )
+    return stmt.where(
+        or_(
+            _like(QuoteRequest.folio),
+            _like(QuoteRequest.apro_ia_folio),
+            _like(QuoteRequest.apro_ia_qa_folio),
+            _like(QuoteRequest.transfer_folio),
+            _like(QuoteRequest.requested_by_name),
+            _like(QuoteRequest.requested_by_email),
+            company_match.exists(),
+        )
+    )
+
+
 def list_quotes(
     *,
     user: dict | None = None,
     shopify_company_id: str | None = None,
     status: str | None = None,
+    q: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
+    term = _normalize_term(q or "")
     with get_session() as session:
-        stmt = select(QuoteRequest).options(selectinload(QuoteRequest.lines))
+        # ``company`` se eager-loadea porque ``to_dict()`` expone
+        # ``company_name``; sin esto sería una consulta extra por fila.
+        stmt = select(QuoteRequest).options(
+            selectinload(QuoteRequest.lines), selectinload(QuoteRequest.company)
+        )
         stmt = _scope_filter(stmt, user=user, shopify_company_id=shopify_company_id)
         if status:
             stmt = stmt.where(QuoteRequest.status == status)
+        if term:
+            stmt = _search_filter(stmt, term)
         count_stmt = _scope_filter(
             select(func.count(QuoteRequest.id)),
             user=user,
@@ -312,11 +430,15 @@ def list_quotes(
         )
         if status:
             count_stmt = count_stmt.where(QuoteRequest.status == status)
+        if term:
+            count_stmt = _search_filter(count_stmt, term)
         total = session.scalar(count_stmt) or 0
         rows = session.scalars(
             stmt.order_by(QuoteRequest.created_at.desc()).limit(limit).offset(offset)
         ).all()
-        return {"total": total, "items": [_enrich(r.to_dict()) for r in rows]}
+        items = [_enrich(r.to_dict()) for r in rows]
+        _attach_seller(session, items)
+        return {"total": total, "items": items}
 
 
 def get_quote(
@@ -338,7 +460,9 @@ def get_quote(
                 return None
         if shopify_company_id and quote.shopify_company_id != shopify_company_id:
             return None
-        return _enrich(quote.to_dict())
+        data = _enrich(quote.to_dict())
+        _attach_seller(session, [data])
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +485,26 @@ def _normalize_rut(value: str | None) -> str:
     (caso real detectado: folio CO-076039).
     """
     return re.sub(r"[^0-9kK]", "", value or "").upper()
+
+
+# ---------------------------------------------------------------------------
+# Ambiente QA de APRO IA
+# ---------------------------------------------------------------------------
+#: APRO IA mantiene un DMS de pruebas (``dms-qa.apro.cl``) con credenciales
+#: propias. Solo las empresas listadas acá participan de ese ambiente: el
+#: espejo de salida se hace únicamente para ellas y los webhooks que entran por
+#: la ruta ``/qa`` se descartan si el RUT no está en la lista. Sin esto, una
+#: prueba en QA podría crear Draft Orders o marcar pedidos pagados en la tienda
+#: de producción de un cliente real.
+def _qa_allowed_ruts() -> set[str]:
+    raw = os.environ.get("APRO_IA_QA_ALLOWED_RUTS") or ""
+    return {r for r in (_normalize_rut(x) for x in raw.split(",")) if r}
+
+
+def _qa_habilita_rut(rut: str | None) -> bool:
+    """``True`` si esa empresa está habilitada para el ambiente QA de APRO IA."""
+    normalizado = _normalize_rut(rut)
+    return bool(normalizado) and normalizado in _qa_allowed_ruts()
 
 
 def _find_company_by_rut(session: Session, rut: str) -> Company | None:
@@ -655,7 +799,9 @@ def _sync_lines_from_apro_ia_products(
     return changed
 
 
-def handle_apro_ia_webhook(payload: dict[str, Any]) -> dict[str, Any]:
+def handle_apro_ia_webhook(
+    payload: dict[str, Any], *, env: str = apro_ia_client.ENV_PROD
+) -> dict[str, Any]:
     """Procesa un evento del webhook de eventos de APRO IA.
 
     Ubica la ``QuoteRequest`` por ``apro_ia_id`` (respaldo: ``apro_ia_folio``
@@ -695,17 +841,49 @@ def handle_apro_ia_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("El payload debe incluir folio o id")
 
     status = str(payload.get("status") or "").strip()
+    es_qa = env == apro_ia_client.ENV_QA
+
+    # La ruta /qa solo atiende a las empresas de la allowlist. Cualquier otra
+    # cosa que llegue por ahí se descarta con 200 (un 4xx haría que el DMS de
+    # QA reintente en loop) y queda registrada para poder auditarla.
+    if es_qa:
+        rut_cliente = str((payload.get("client") or {}).get("rut") or "").strip()
+        if not _qa_habilita_rut(rut_cliente):
+            logger.warning(
+                "Webhook APRO IA QA: RUT fuera de la allowlist — se descarta",
+                extra={"event": event, "folio": folio, "rut": rut_cliente},
+            )
+            return {"received": True, "ignored": True, "matched": False}
 
     with get_session() as session:
-        stmt = select(QuoteRequest)
-        stmt = stmt.where(
-            QuoteRequest.apro_ia_id == apro_ia_id
-            if apro_ia_id
-            else QuoteRequest.apro_ia_folio == folio
-        )
-        quote = session.scalars(stmt).first()
+        # QA y producción matchean contra columnas distintas: son secuencias de
+        # IDs independientes y un id de QA puede coincidir con el de una
+        # cotización real de otro cliente.
+        if es_qa:
+            criterio = (
+                QuoteRequest.apro_ia_qa_id == apro_ia_id
+                if apro_ia_id
+                else QuoteRequest.apro_ia_qa_folio == folio
+            )
+        else:
+            criterio = (
+                QuoteRequest.apro_ia_id == apro_ia_id
+                if apro_ia_id
+                else QuoteRequest.apro_ia_folio == folio
+            )
+        quote = session.scalars(select(QuoteRequest).where(criterio)).first()
 
         if not quote:
+            # A diferencia de producción, un quotation.created de QA sin
+            # contraparte NO auto-crea la cotización: eso abriría un Draft
+            # Order real en la tienda productiva desde una prueba.
+            if es_qa:
+                logger.warning(
+                    "Webhook APRO IA QA: sin cotización espejada para el evento "
+                    "— no se auto-crea (evitaría un Draft Order real)",
+                    extra={"event": event, "folio": folio, "apro_ia_id": apro_ia_id},
+                )
+                return {"received": True, "matched": False, "created": False}
             if event != "quotation.created":
                 logger.warning(
                     "Webhook APRO IA: no se encontró QuoteRequest para el evento",
@@ -783,6 +961,496 @@ def handle_apro_ia_webhook(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {"received": True, "matched": True, "quote_id": quote_id, "status": status}
+
+
+# ---------------------------------------------------------------------------
+# Webhook APRO IA — pagos: transferencias y créditos
+# (ver docs/Transferencias APRO IA.md)
+# ---------------------------------------------------------------------------
+#: Estados finales que documenta APRO IA para una transferencia. La comparación
+#: es sobre el texto normalizado (sin tildes/mayúsculas) porque el DMS los
+#: envía con distinta capitalización según la pantalla que los genera.
+#: Estado de la ``QuoteRequest`` cuando APRO IA rechaza el pago. Es propio del
+#: medio de pago y no se confunde con ``RECHAZADA``, que significa que el
+#: cliente rechazó la cotización.
+QUOTE_STATUS_PAGO_RECHAZADO = "PAGO_RECHAZADO"
+
+TRANSFER_STATUS_APROBADA = "APROBADA"
+#: Todo estado final que no sea aprobación. Antes se llamaba ``ANULADA`` y
+#: anulaba el pedido en Shopify; hoy solo lo etiqueta (ver
+#: ``draft_order_service.tag_order_payment_rejected``).
+TRANSFER_STATUS_RECHAZADA = "RECHAZADA"
+
+_TRANSFER_STATUS_MAP = {
+    "aprobada": TRANSFER_STATUS_APROBADA,
+    "aprobado": TRANSFER_STATUS_APROBADA,
+    "descartada": TRANSFER_STATUS_RECHAZADA,
+    "descartado": TRANSFER_STATUS_RECHAZADA,
+    "en papelera": TRANSFER_STATUS_RECHAZADA,
+    "papelera": TRANSFER_STATUS_RECHAZADA,
+    "descartada / en papelera": TRANSFER_STATUS_RECHAZADA,
+    "anulada": TRANSFER_STATUS_RECHAZADA,
+    "anulado": TRANSFER_STATUS_RECHAZADA,
+    "rechazada": TRANSFER_STATUS_RECHAZADA,
+    "rechazado": TRANSFER_STATUS_RECHAZADA,
+}
+
+
+def _normalize_transfer_status(value: str) -> str | None:
+    """Mapea el ``status`` crudo del webhook a ``APROBADA``/``RECHAZADA``.
+
+    Devuelve ``None`` si el estado no es uno de los finales documentados (el
+    DMS puede emitir estados intermedios que no deben mover el pedido).
+    """
+    raw = " ".join(str(value or "").strip().lower().split())
+    if not raw:
+        return None
+    normalized = (
+        raw.replace("á", "a").replace("é", "e").replace("í", "i")
+        .replace("ó", "o").replace("ú", "u")
+    )
+    return _TRANSFER_STATUS_MAP.get(normalized)
+
+
+_ORDER_GID_PREFIX = "gid://shopify/Order/"
+
+
+def _extract_shopify_order_id(order_ref: str) -> str:
+    """Devuelve el número de pedido de Shopify contenido en ``order_ref``.
+
+    Acepta el order name que manda APRO IA, con o sin ``#`` (``1013`` /
+    ``#1013``), el ID interno pelado (``6723309600952``) y el GID completo
+    (``gid://shopify/Order/6723309600952``). Devuelve ``""`` si ``order_ref``
+    no parece un pedido (ej. un folio ``CO-000040``).
+    """
+    ref = str(order_ref or "").strip()
+    if ref.startswith(_ORDER_GID_PREFIX):
+        ref = ref.rsplit("/", 1)[-1]
+    ref = ref.lstrip("#").strip()
+    return ref if ref.isdigit() else ""
+
+
+def _rut_matches(company: Company | None, normalized_rut: str) -> bool:
+    """Sin RUT en el payload no se puede verificar; con RUT tiene que calzar."""
+    if not normalized_rut:
+        return True
+    if company is None:
+        return False
+    return _normalize_rut(company.billing_rut) == normalized_rut
+
+
+def _find_transfer_target(
+    session: Session, order_ref: str, rut: str
+) -> dict[str, Any] | None:
+    """Resuelve a qué pedido (y opcionalmente qué cotización) apunta ``order``.
+
+    APRO IA envía el **order name del pedido de Shopify** (``1013``, el número
+    visible que ve el cliente; también se acepta el ID interno o el GID): el
+    pago se genera en el
+    checkout (transferencia como medio de pago manual, que deja el pedido
+    impago) y ellos solo confirman después que la transferencia se recibió. Por
+    eso el sujeto del webhook es el pedido y la ``QuoteRequest`` es opcional —
+    un pedido B2B puede no venir de un RFQ nuestro.
+
+    Se sigue aceptando un folio ``CO-NNNNNN`` como ``order`` por
+    compatibilidad: en ese caso se resuelve la cotización y de ahí el pedido.
+
+    El RUT es la guarda en ambos caminos. Si el pedido pertenece a otra
+    empresa, o no lo tenemos sincronizado (no llegó el webhook ``orders/create``
+    y por lo tanto no hay con qué verificar de quién es), no se procesa: marcar
+    pagado el pedido equivocado es peor que no procesar.
+
+    Devuelve ``{order_gid, quote, shopify_order, company, shop_domain}`` o
+    ``None``.
+    """
+    ref = str(order_ref or "").strip()
+    if not ref:
+        return None
+    normalized_rut = _normalize_rut(rut)
+
+    order_id = _extract_shopify_order_id(ref)
+    if order_id:
+        shopify_order = session.scalars(
+            select(ShopifyOrder).where(ShopifyOrder.shopify_order_id == order_id)
+        ).first()
+        if shopify_order is None:
+            # El caso normal: APRO IA manda el número visible del pedido
+            # (#1013) y no el ID interno; son valores distintos y no se pueden
+            # derivar entre sí. Sin colisión posible: los IDs tienen 13 dígitos
+            # y los order names 4.
+            shopify_order = session.scalars(
+                select(ShopifyOrder).where(
+                    ShopifyOrder.order_name.in_([ref, f"#{order_id}", order_id])
+                )
+            ).first()
+        if shopify_order is None:
+            logger.warning(
+                "Webhook pagos APRO IA: el pedido no está sincronizado "
+                "en Apro Click — no se puede verificar a qué empresa pertenece",
+                extra={"order": ref, "rut": rut},
+            )
+            return None
+
+        order_gid = f"{_ORDER_GID_PREFIX}{shopify_order.shopify_order_id}"
+        quote = session.scalars(
+            select(QuoteRequest).where(QuoteRequest.order_gid == order_gid)
+        ).first()
+        company = shopify_order.company or (quote.company if quote else None)
+        if not _rut_matches(company, normalized_rut):
+            logger.warning(
+                "Webhook pagos APRO IA: el pedido pertenece a otra "
+                "empresa que la del RUT informado — no se procesa",
+                extra={"order": ref, "rut": rut},
+            )
+            return None
+        return {
+            "order_gid": order_gid,
+            "quote": quote,
+            "shopify_order": shopify_order,
+            "company": company,
+            "shop_domain": shopify_order.shop_domain
+            or (quote.shop_domain if quote else ""),
+        }
+
+    quote = _find_quote_by_folio(session, ref, normalized_rut)
+    if quote is None:
+        return None
+    return {
+        "order_gid": quote.order_gid or "",
+        "quote": quote,
+        "shopify_order": None,
+        "company": quote.company,
+        "shop_domain": quote.shop_domain,
+    }
+
+
+def _find_quote_by_folio(
+    session: Session, ref: str, normalized_rut: str
+) -> QuoteRequest | None:
+    """Camino de compatibilidad: ``order`` traído como folio de cotización.
+
+    Busca por ``apro_ia_folio`` y por nuestro ``folio`` (incluido el que lleva
+    sufijo de desambiguación, ver ``_unique_own_folio``). El folio de APRO IA
+    **no es único** entre cotizaciones (caso real ``AC-000007``, ver
+    ``handle_apro_ia_webhook``), así que el RUT desempata.
+    """
+    candidates = list(
+        session.scalars(
+            select(QuoteRequest)
+            .where(
+                (QuoteRequest.apro_ia_folio == ref)
+                | (QuoteRequest.folio == ref)
+                | (QuoteRequest.folio.like(f"{ref}-%"))
+            )
+            .order_by(QuoteRequest.created_at.desc())
+        ).all()
+    )
+    if not candidates:
+        return None
+    if not normalized_rut:
+        return candidates[0] if len(candidates) == 1 else None
+
+    matching = [q for q in candidates if _rut_matches(q.company, normalized_rut)]
+    if len(matching) == 1:
+        return matching[0]
+    if not matching:
+        logger.warning(
+            "Webhook pagos APRO IA: el folio existe pero pertenece a "
+            "otra empresa que la del RUT informado — no se procesa",
+            extra={"order": ref, "rut": _rut_hint(normalized_rut), "candidatos": len(candidates)},
+        )
+        return None
+    logger.warning(
+        "Webhook pagos APRO IA: más de una cotización coincide con el "
+        "folio y el RUT — no se procesa para no afectar la equivocada",
+        extra={"order": ref, "candidatos": len(matching)},
+    )
+    return None
+
+
+def _rut_hint(normalized_rut: str) -> str:
+    """RUT enmascarado para logs (no exponer el dato completo en CloudWatch)."""
+    return f"…{normalized_rut[-4:]}" if len(normalized_rut) > 4 else "…"
+
+
+def _ensure_order_for_transfer(session: Session, quote: QuoteRequest) -> str:
+    """Crea el pedido en Shopify para una cotización que aún no lo generó.
+
+    Camino de respaldo: lo normal es que el pedido ya exista porque el cliente
+    pagó en el checkout. Pero si APRO IA confirma la transferencia de una
+    cotización que nunca llegó a pedido (quedó en el Draft Order, o ni
+    siquiera), se arma acá: se crea el draft si falta y se completa con
+    ``paymentPending`` para que el pedido nazca impago y sea la transferencia
+    la que lo marque pagado.
+
+    Devuelve el ``order_gid`` resultante.
+    """
+    if quote.order_gid:
+        return quote.order_gid
+    if not quote.draft_order_gid:
+        draft_order_service.create_quote_draft(session, quote)
+        quote.status = "COTIZADA"
+    draft_order_service.complete_quote(session, quote, payment_pending=True)
+    if not quote.order_gid:
+        raise ValueError(
+            "draftOrderComplete no devolvió el pedido creado; no se puede "
+            "marcar la transferencia como pagada"
+        )
+    return quote.order_gid
+
+
+#: Medios de pago que confirma APRO IA. Cada uno entra por su propia ruta y
+#: solo cambia el tag/nota en Shopify y el texto del aviso a SALES: el ciclo
+#: (confirmar o anular un pedido que nació impago del checkout) es el mismo.
+PAYMENT_METHOD_TRANSFER = "transferencia"
+PAYMENT_METHOD_CREDIT = "credito"
+
+
+def handle_apro_ia_credit_webhook(
+    payload: dict[str, Any], *, env: str = apro_ia_client.ENV_PROD
+) -> dict[str, Any]:
+    """Webhook de pagos con **crédito** de APRO IA.
+
+    Mismo payload y mismo comportamiento que
+    ``handle_apro_ia_transfer_webhook``; la única diferencia es el medio de
+    pago con que queda marcado el pedido en Shopify (tag ``credito``) y el
+    texto del aviso a SALES. Va por una ruta distinta porque APRO IA emite los
+    dos documentos por separado.
+    """
+    return handle_apro_ia_transfer_webhook(
+        payload, env=env, payment_method=PAYMENT_METHOD_CREDIT
+    )
+
+
+def handle_apro_ia_transfer_webhook(
+    payload: dict[str, Any],
+    *,
+    env: str = apro_ia_client.ENV_PROD,
+    payment_method: str = PAYMENT_METHOD_TRANSFER,
+) -> dict[str, Any]:
+    """Procesa el webhook de pagos de APRO IA (transferencia o crédito).
+
+    Payload (``docs/Transferencias AproClick.pdf``): ``folio`` (folio interno
+    del documento de pago en APRO IA), ``rut`` (cliente), ``status`` (estado
+    final del documento) y ``order`` (ID del pedido en Shopify).
+
+    El pago se genera en el **checkout de Shopify** (transferencia y crédito
+    son medios de pago manuales, que dejan el pedido impago); APRO IA solo
+    confirma después que el pago se recibió. Por eso el sujeto de este webhook
+    es el pedido, no la cotización: un pedido B2B puede no venir de un RFQ
+    nuestro y igual debe quedar pagado.
+
+    - ``Aprobada`` → ``orderMarkAsPaid`` + tag del medio (``transferencia`` o
+      ``credito``) y nota con el folio. Si hay cotización asociada pasa a
+      ``ACEPTADA``; y en el caso de borde en que la cotización nunca llegó a
+      pedido, se crea (draft → ``draftOrderComplete`` impago) antes de marcarlo.
+    - ``Descartada``/``En papelera``/``Anulada``/``Rechazada`` → el pedido
+      **no** se anula: queda abierto y pendiente de pago en Shopify, con el tag
+      del rechazo (``transferencia-rechazada`` / ``credito-rechazado``) y una
+      nota con el folio. Si solo había Draft Order, tampoco se elimina. La
+      cotización, si existe, pasa a ``PAGO_RECHAZADO`` para que SALES la vea en
+      el panel.
+
+    Idempotente: un reenvío del mismo estado no vuelve a tocar Shopify ni
+    reenvía el email. Con cotización la guarda es ``transfer_status`` /
+    ``transfer_paid_at``; sin cotización, el propio estado del pedido en
+    Shopify (``canMarkAsPaid`` para el pago, el tag ya puesto para el
+    rechazo). Los dos medios comparten
+    esas columnas —el ciclo es el mismo— y ``payment_method`` queda persistido
+    para poder distinguirlos después.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("Payload inválido")
+
+    transfer_folio = str(payload.get("folio") or "").strip()
+    rut = str(payload.get("rut") or "").strip()
+    raw_status = str(payload.get("status") or "").strip()
+    order_ref = str(payload.get("order") or "").strip()
+
+    # Rastro de entrada: deja el aviso en CloudWatch aunque después no matchee
+    # o el payload venga incompleto. Sin esto, un webhook que no aplica nada es
+    # indistinguible de uno que nunca llegó.
+    logger.info(
+        "Webhook pagos APRO IA recibido",
+        extra={
+            "medio": payment_method,
+            "folio": transfer_folio,
+            "order": order_ref,
+            "status": raw_status,
+            "rut": rut,
+        },
+    )
+
+    if not order_ref:
+        raise ValueError("El payload debe incluir order")
+    if not raw_status:
+        raise ValueError("El payload debe incluir status")
+
+    # Misma regla que el webhook de eventos: la ruta /qa solo opera sobre las
+    # empresas habilitadas. Sin esta guarda, una transferencia de prueba podría
+    # marcar pagado o anular el pedido real de otro cliente.
+    if env == apro_ia_client.ENV_QA and not _qa_habilita_rut(rut):
+        logger.warning(
+            "Webhook pagos APRO IA QA: RUT fuera de la allowlist "
+            "— se descarta",
+            extra={"order": order_ref, "folio": transfer_folio, "rut": rut},
+        )
+        return {"received": True, "ignored": True, "matched": False}
+
+    estado = _normalize_transfer_status(raw_status)
+    if estado is None:
+        logger.info(
+            "Webhook pagos APRO IA: estado no final, se ignora",
+            extra={"status": raw_status, "order": order_ref},
+        )
+        return {"received": True, "matched": False, "applied": False, "status": raw_status}
+
+    notify: dict[str, Any] | None = None
+    with get_session() as session:
+        target = _find_transfer_target(session, order_ref, rut)
+        if target is None:
+            logger.warning(
+                "Webhook pagos APRO IA: no se encontró el pedido",
+                extra={"order": order_ref, "folio": transfer_folio},
+            )
+            return {"received": True, "matched": False, "applied": False}
+
+        quote: QuoteRequest | None = target["quote"]
+        shopify_order: ShopifyOrder | None = target["shopify_order"]
+        order_gid: str = target["order_gid"]
+        shop_domain: str = target["shop_domain"]
+
+        if quote is not None and _transferencia_ya_aplicada(quote, raw_status, estado):
+            return {
+                "received": True,
+                "matched": True,
+                "applied": False,
+                "quote_id": str(quote.id),
+                "order_gid": order_gid,
+                "status": raw_status,
+            }
+
+        if quote is not None:
+            quote.transfer_folio = transfer_folio or quote.transfer_folio
+            quote.transfer_status = raw_status
+            quote.payment_method = payment_method
+
+        # Los fallos de Shopify se re-lanzan como RuntimeError (→ HTTP 500) y no
+        # como ValueError (→ 400): un 400 le diría a APRO IA que el payload está
+        # mal y que no vale la pena reintentar, cuando en realidad el pago sí
+        # ocurrió y solo falló nuestro lado.
+        try:
+            if estado == TRANSFER_STATUS_APROBADA:
+                if not order_gid and quote is not None:
+                    order_gid = _ensure_order_for_transfer(session, quote)
+                if not order_gid:
+                    raise ValueError(
+                        "La transferencia no tiene pedido de Shopify al que aplicarse"
+                    )
+                resultado = draft_order_service.mark_order_paid(
+                    session,
+                    order_gid,
+                    shop_domain=shop_domain,
+                    transfer_folio=transfer_folio,
+                    payment_method=payment_method,
+                )
+                aplicado = not resultado.get("already_paid")
+                if quote is not None:
+                    quote.transfer_paid_at = datetime.now(timezone.utc)
+                    quote.status = "ACEPTADA"
+                if shopify_order is not None:
+                    shopify_order.financial_status = "paid"
+            else:
+                # Rechazo: el pedido **no** se anula. Queda abierto y pendiente
+                # de pago en Shopify, solo etiquetado, y el seguimiento pasa a
+                # ser responsabilidad de SALES desde el panel.
+                if order_gid:
+                    resultado = draft_order_service.tag_order_payment_rejected(
+                        session,
+                        order_gid,
+                        shop_domain=shop_domain,
+                        transfer_folio=transfer_folio,
+                        payment_method=payment_method,
+                        raw_status=raw_status,
+                    )
+                    aplicado = not resultado.get("already_tagged")
+                else:
+                    # Sin pedido solo hay Draft Order (o nada): tampoco se
+                    # elimina — el cliente puede retomar el pago y el draft es
+                    # el precio ya negociado.
+                    aplicado = quote is not None
+                if quote is not None:
+                    quote.status = QUOTE_STATUS_PAGO_RECHAZADO
+        except Exception as e:
+            logger.exception(
+                "Webhook pagos APRO IA: falló la operación en Shopify",
+                extra={
+                    "medio": payment_method,
+                    "order": order_ref,
+                    "order_gid": order_gid,
+                    "estado": estado,
+                    "quote_id": str(quote.id) if quote else None,
+                },
+            )
+            raise RuntimeError(
+                f"No se pudo aplicar la transferencia en Shopify: {e}"
+            ) from e
+
+        company = target["company"]
+        if aplicado:
+            notify = {
+                "admin_emails": _admin_emails(session, company),
+                "company_name": (
+                    (company.name if company else None)
+                    or (quote.requested_by_name if quote else None)
+                    or ""
+                ),
+                "folio": (
+                    (quote.folio if quote else None)
+                    or (shopify_order.order_name if shopify_order else None)
+                    or order_ref
+                ),
+                "quote_id": str(quote.id) if quote else "",
+                "transfer_folio": transfer_folio,
+                "estado": estado,
+                "status": raw_status,
+                "payment_method": payment_method,
+            }
+        result = {
+            "received": True,
+            "matched": True,
+            "applied": aplicado,
+            "quote_id": str(quote.id) if quote else None,
+            "order_gid": order_gid,
+            "quote_status": quote.status if quote else None,
+            "status": raw_status,
+        }
+        session.commit()
+
+    if notify:
+        encolar_transferencia_estado(**notify)
+    return result
+
+
+def _etiqueta_medio(payment_method: str) -> str:
+    """Nombre del medio de pago para notas y textos visibles."""
+    return "Crédito" if payment_method == PAYMENT_METHOD_CREDIT else "Transferencia"
+
+
+def _transferencia_ya_aplicada(
+    quote: QuoteRequest, raw_status: str, estado: str
+) -> bool:
+    """``True`` si este mismo evento ya se procesó sobre la cotización.
+
+    APRO IA no documenta su política de reintentos, así que se asume que puede
+    reenviar el mismo evento; sin esta guarda un reenvío duplicaría el email a
+    SALES.
+    """
+    if quote.transfer_status != raw_status:
+        return False
+    if estado == TRANSFER_STATUS_APROBADA:
+        return quote.transfer_paid_at is not None
+    return quote.status == QUOTE_STATUS_PAGO_RECHAZADO
 
 
 # ---------------------------------------------------------------------------
@@ -1049,6 +1717,82 @@ def _sync_apro_ia_and_pdf(
             extra={"quote_id": str(quote.id)},
         )
         _regenerate_pdf(session, quote)
+
+    # Después del sync productivo y fuera de su try: el espejo es independiente
+    # (si producción falló igual queremos la copia en QA, y viceversa).
+    _espejar_en_qa(
+        session,
+        quote,
+        client_rut=client_rut,
+        client_nombre=client_nombre,
+        seller_email=seller_email,
+        productos=productos,
+    )
+
+
+def _espejar_en_qa(
+    session: Session,
+    quote: QuoteRequest,
+    *,
+    client_rut: str,
+    client_nombre: str,
+    seller_email: str,
+    productos: list[dict[str, Any]],
+) -> None:
+    """Replica la cotización en el DMS de QA, solo para empresas habilitadas.
+
+    Es *fire-and-forget* por diseño: cualquier fallo se loguea y se traga. QA
+    no puede romper ni demorar el flujo productivo, así que no toca ``folio``,
+    ``apro_ia_folio`` ni el PDF — esos siguen viniendo de producción, que es la
+    fuente de verdad. Los identificadores del espejo van a
+    ``apro_ia_qa_id``/``apro_ia_qa_folio``, que es contra lo que matchea el
+    webhook de la ruta ``/qa``.
+    """
+    if not _qa_habilita_rut(client_rut):
+        return
+    if not apro_ia_client.env_configurado(apro_ia_client.ENV_QA):
+        logger.info(
+            "Espejo QA APRO IA omitido: el ambiente no tiene base URL o token",
+            extra={"quote_id": str(quote.id), "rut": client_rut},
+        )
+        return
+
+    try:
+        if quote.apro_ia_qa_folio:
+            apro_ia_client.editar_cotizacion(
+                quote.apro_ia_qa_folio,
+                productos=productos,
+                comment=quote.comment,
+                env=apro_ia_client.ENV_QA,
+            )
+        else:
+            if not seller_email:
+                raise RuntimeError("seller_email requerido para crear en APRO IA QA")
+            data = apro_ia_client.crear_cotizacion(
+                client_rut=client_rut,
+                client_nombre=client_nombre,
+                seller_email=seller_email,
+                seller_sap_code=_seller_sap_code(session, seller_email, quote.company),
+                productos=productos,
+                comment=quote.comment,
+                env=apro_ia_client.ENV_QA,
+            )
+            quote.apro_ia_qa_id = str(data.get("id") or "") or None
+            quote.apro_ia_qa_folio = data.get("folio") or None
+            session.flush()
+        logger.info(
+            "Cotización espejada en el ambiente QA de APRO IA",
+            extra={
+                "quote_id": str(quote.id),
+                "apro_ia_qa_folio": quote.apro_ia_qa_folio,
+                "apro_ia_folio": quote.apro_ia_folio,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Espejo QA APRO IA falló — se ignora, no afecta el flujo productivo",
+            extra={"quote_id": str(quote.id), "rut": client_rut},
+        )
 
 
 def negotiate_draft(quote_id: str, *, seller_email: str = "") -> dict[str, Any]:

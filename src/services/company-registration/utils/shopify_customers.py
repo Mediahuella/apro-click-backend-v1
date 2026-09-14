@@ -280,6 +280,24 @@ class ShopifyAPIError(Exception):
         super().__init__(f"Shopify API {status}: {payload}")
 
 
+def es_error_customer_ya_asociado(exc: "ShopifyAPIError") -> bool:
+    """True si Shopify rechazó el enlace porque el Customer ya es contacto de otra company.
+
+    Shopify B2B permite que un Customer sea contacto de **una sola** empresa:
+    `companyAssignCustomerAsContact` devuelve
+    "Customer is already associated with a company contact" (`INVALID_INPUT`).
+    """
+    payload = exc.payload
+    if not isinstance(payload, dict):
+        return "already associated with a company contact" in str(payload).lower()
+    for key in ("userErrors", "graphql_errors", "errors"):
+        for item in payload.get(key) or []:
+            msg = (item.get("message") if isinstance(item, dict) else str(item)) or ""
+            if "already associated with a company contact" in msg.lower():
+                return True
+    return False
+
+
 def format_shopify_api_error_detail(exc: ShopifyAPIError, *, max_len: int = 4000) -> str:
     """Resume `exc.payload` para mostrar al usuario o en logs (userErrors, graphql_errors, etc.)."""
     p = exc.payload
@@ -463,6 +481,22 @@ def create_customer(
     cust = cc.get("customer")
     if cust and cust.get("id"):
         return _customer_gid_to_numeric_id(cust["id"])
+
+    # El teléfono es único por Customer en Shopify: si ya lo usa otro cliente
+    # reintentamos sin él en vez de bloquear el alta (queda en la CompanyLocation).
+    if user_errors and ph and _es_error_telefono_tomado(user_errors):
+        input_payload.pop("phone", None)
+        data = _graphql_request(
+            shop_domain,
+            access_token,
+            MUTATION_CUSTOMER_CREATE,
+            {"input": input_payload},
+        )
+        cc = data.get("customerCreate") or {}
+        user_errors = cc.get("userErrors") or []
+        cust = cc.get("customer")
+        if cust and cust.get("id"):
+            return _customer_gid_to_numeric_id(cust["id"])
 
     if user_errors and email:
         existing = find_customer_numeric_id_by_email(
@@ -757,8 +791,119 @@ def delete_company_location(
         )
 
 
+_QUERY_CUSTOMER_COMPANY_PROFILES = """
+query CustomerCompanyProfiles($id: ID!) {
+  customer(id: $id) {
+    id
+    companyContactProfiles {
+      company {
+        id
+        name
+      }
+    }
+  }
+}
+"""
+
+
+def get_customer_company_names(
+    shop_domain: str,
+    access_token: str,
+    customer_numeric: str,
+) -> list[str]:
+    """Nombres de las companies B2B donde el Customer ya es contacto.
+
+    Shopify solo admite **una** company por Customer, así que sirve para
+    fallar temprano —antes de `companyCreate`— y no dejar una empresa huérfana.
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _QUERY_CUSTOMER_COMPANY_PROFILES,
+        {"id": _to_customer_gid(customer_numeric)},
+    )
+    customer = data.get("customer")
+    if not isinstance(customer, dict):
+        return []
+    nombres: list[str] = []
+    for profile in customer.get("companyContactProfiles") or []:
+        company = (profile or {}).get("company") or {}
+        nombre = (company.get("name") or "").strip()
+        if nombre:
+            nombres.append(nombre)
+    return nombres
+
+
+_QUERY_COMPANY_BY_EXTERNAL_ID = """
+query CompanyByExternalId($q: String!) {
+  companies(first: 2, query: $q) {
+    edges {
+      node {
+        id
+        externalId
+        locations(first: 5) {
+          edges {
+            node {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def find_company_by_external_id(
+    shop_domain: str,
+    access_token: str,
+    external_id: str,
+) -> dict[str, Any] | None:
+    """Busca la Company cuyo `externalId` es el id de la solicitud de registro.
+
+    Sirve para reintentar una aprobación que falló **después** de `companyCreate`
+    (assign de contacto, mainContact, roles) sin duplicar la empresa en Shopify.
+    """
+    ext = (external_id or "").strip()
+    if not ext:
+        return None
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _QUERY_COMPANY_BY_EXTERNAL_ID,
+        {"q": f"external_id:{ext}"},
+    )
+    edges = ((data.get("companies") or {}).get("edges") or [])
+    for edge in edges:
+        node = edge.get("node") if isinstance(edge, dict) else None
+        if not isinstance(node, dict):
+            continue
+        if (node.get("externalId") or "").strip() == ext:
+            return node
+    return None
+
+
 def _company_user_errors(data: dict[str, Any]) -> list[dict[str, Any]]:
     return list((data.get("companyCreate") or {}).get("userErrors") or [])
+
+
+def _es_error_telefono_tomado(errs: list[dict[str, Any]]) -> bool:
+    """True si Shopify rechazó el `companyContact.phone` porque ya lo usa otro Customer.
+
+    Shopify exige que el teléfono sea único entre Customers de la tienda. Si el número
+    ya pertenece a un cliente con otro email, `companyCreate` falla con
+    `code=TAKEN` y `field=['input','companyContact','phone']`.
+    """
+    for err in errs:
+        field = err.get("field") or []
+        if not any("phone" in str(f).lower() for f in field):
+            continue
+        code = (err.get("code") or "").upper()
+        message = (err.get("message") or "").lower()
+        if code == "TAKEN" or "already been taken" in message:
+            return True
+    return False
 
 
 def _assign_user_errors(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -847,6 +992,57 @@ def add_locations_to_catalog(
     errs = payload.get("userErrors") or []
     if errs:
         raise ShopifyAPIError(422, {"userErrors": errs, "message": "catalogContextUpdate"})
+
+
+#: Metafield que lee la Shopify Function ``manejo-de-credito`` para decidir si
+#: muestra el pago con crédito en el checkout. Espejo de
+#: ``companies/utils/shopify_credit_sync.py`` — si cambia el namespace/key, hay
+#: que cambiarlo en los dos servicios y en la Function del connector.
+CREDIT_METAFIELD_NAMESPACE = "aproclick"
+CREDIT_METAFIELD_KEY = "credito"
+
+_METAFIELDS_SET = """
+mutation SetCompanyCredito($metafields: [MetafieldsSetInput!]!) {
+  metafieldsSet(metafields: $metafields) {
+    metafields { id namespace key value }
+    userErrors { field message code }
+  }
+}
+"""
+
+
+def set_company_credit_metafield(
+    shop_domain: str,
+    access_token: str,
+    company_gid: str,
+    *,
+    has_credit: bool,
+) -> None:
+    """Escribe ``aproclick.credito`` en la Company B2B recién creada.
+
+    Lanza ``ShopifyAPIError`` si Shopify devuelve userErrors; el caller decide
+    si eso bloquea (en la aprobación, no: se loguea y sigue).
+    """
+    data = _graphql_request(
+        shop_domain,
+        access_token,
+        _METAFIELDS_SET,
+        {
+            "metafields": [
+                {
+                    "ownerId": str(company_gid),
+                    "namespace": CREDIT_METAFIELD_NAMESPACE,
+                    "key": CREDIT_METAFIELD_KEY,
+                    "type": "boolean",
+                    "value": "true" if has_credit else "false",
+                }
+            ]
+        },
+    )
+    payload = data.get("metafieldsSet") or {}
+    errs = payload.get("userErrors") or []
+    if errs:
+        raise ShopifyAPIError(422, {"userErrors": errs, "message": "metafieldsSet"})
 
 
 _QUERY_COMPANY_MAIN_CONTACT = """
@@ -1091,6 +1287,73 @@ def get_company_contacts_with_roles(
     return {"contactRoles": contact_roles, "locations": locations, "contacts": contacts}
 
 
+def _link_contact_to_company(
+    shop_domain: str,
+    access_token: str,
+    *,
+    company_gid: str,
+    customer_numeric: str,
+    location_gids: list[str],
+) -> dict[str, str]:
+    """Enlaza un Customer existente a una Company como mainContact con rol de compra.
+
+    Pasos: `companyAssignCustomerAsContact` → `companyAssignMainContact` →
+    rol de pedidos en cada CompanyLocation.
+    """
+    assign_data = _graphql_request(
+        shop_domain,
+        access_token,
+        MUTATION_COMPANY_ASSIGN_CUSTOMER,
+        {
+            "companyId": company_gid,
+            "customerId": _to_customer_gid(customer_numeric),
+        },
+    )
+    aerrs = _assign_user_errors(assign_data)
+    if aerrs:
+        raise ShopifyAPIError(
+            422,
+            {"userErrors": aerrs, "message": "companyAssignCustomerAsContact"},
+        )
+
+    # companyAssignCustomerAsContact crea el contacto pero NO lo marca como mainContact.
+    # Hay que promoverlo explícitamente para que el cliente pueda comprar como B2B.
+    contact_gid = (
+        (assign_data.get("companyAssignCustomerAsContact") or {})
+        .get("companyContact", {})
+        .get("id")
+    )
+    if not contact_gid:
+        # Shopify a veces devuelve companyContact: null (p. ej. si el cliente ya era
+        # contacto). Consultamos los contactos actuales de la company para obtener el GID.
+        info = get_company_contact_info(shop_domain, access_token, company_gid)
+        if info:
+            contact_gid = _find_contact_gid_by_customer(
+                info.get("contacts") or [], customer_numeric
+            )
+    if not contact_gid:
+        raise ShopifyAPIError(
+            422,
+            {
+                "message": (
+                    "No se pudo determinar el CompanyContact para asignar mainContact; "
+                    "el cliente no tendría permiso de compra B2B."
+                )
+            },
+        )
+    set_main_contact(shop_domain, access_token, company_gid, contact_gid)
+
+    assign_contact_ordering_role(
+        shop_domain,
+        access_token,
+        contact_gid,
+        location_gids,
+        company_gid=company_gid,
+    )
+
+    return _shopify_b2b_ids(customer_numeric, company_gid, location_gids)
+
+
 def ensure_shopify_b2b_company(
     shop_domain: str,
     access_token: str,
@@ -1105,6 +1368,8 @@ def ensure_shopify_b2b_company(
 ) -> dict[str, str]:
     """Crea la empresa B2B en Shopify y devuelve ids del cliente principal y de la company.
 
+    - Si la company ya existe en Shopify con este `externalId` (reintento de una aprobación
+      que falló después de `companyCreate`), la **reutiliza** en vez de duplicarla.
     - Si ya existe un **Customer** con el mismo email, crea la company **sin** `companyContact`
       y enlaza con `companyAssignCustomerAsContact`.
     - Si no existe, usa `companyCreate` con `companyContact` + `companyLocation` (Shopify crea el cliente).
@@ -1131,7 +1396,58 @@ def ensure_shopify_b2b_company(
         shipping=shipping,
     )
 
+    # Reintento de una aprobación que ya creó la company pero falló al enlazar el
+    # contacto: Shopify la conserva y `companyCreate` la duplicaría.
+    existing_company = find_company_by_external_id(
+        shop_domain, access_token, external_id
+    )
+    if existing_company:
+        company_gid = str(existing_company.get("id") or "")
+        loc_gids_reuse = _extract_location_gids(existing_company)
+        if not existing_numeric:
+            # La company existe pero el customer no: hay que crearlo aparte porque
+            # `companyContact` solo se puede pasar en `companyCreate`.
+            existing_numeric = create_customer(
+                shop_domain,
+                access_token,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                phone=contact_phone,
+            )
+        return _link_contact_to_company(
+            shop_domain,
+            access_token,
+            company_gid=company_gid,
+            customer_numeric=existing_numeric,
+            location_gids=loc_gids_reuse,
+        )
+
     if existing_numeric:
+        # Shopify admite una sola company por Customer. Si ya es contacto de otra,
+        # `companyAssignCustomerAsContact` fallará *después* de crear la company y la
+        # dejaría huérfana: cortamos antes con el mismo mensaje que devuelve Shopify.
+        companies_previas = get_customer_company_names(
+            shop_domain, access_token, existing_numeric
+        )
+        if companies_previas:
+            raise ShopifyAPIError(
+                422,
+                {
+                    "userErrors": [
+                        {
+                            "message": (
+                                "Customer is already associated with a company contact: "
+                                + ", ".join(companies_previas)
+                            ),
+                            "code": "INVALID_INPUT",
+                            "field": ["companyId"],
+                        }
+                    ],
+                    "message": "companyAssignCustomerAsContact (validación previa)",
+                },
+            )
+
         create_input: dict[str, Any] = {
             "company": company_block,
             "companyLocation": location_block,
@@ -1151,56 +1467,13 @@ def ensure_shopify_b2b_company(
                 {"userErrors": errs, "message": "companyCreate (cliente existente)"},
             )
 
-        assign_data = _graphql_request(
+        return _link_contact_to_company(
             shop_domain,
             access_token,
-            MUTATION_COMPANY_ASSIGN_CUSTOMER,
-            {
-                "companyId": company_gid,
-                "customerId": _to_customer_gid(existing_numeric),
-            },
-        )
-        aerrs = _assign_user_errors(assign_data)
-        if aerrs:
-            raise ShopifyAPIError(
-                422,
-                {"userErrors": aerrs, "message": "companyAssignCustomerAsContact"},
-            )
-
-        # companyAssignCustomerAsContact crea el contacto pero NO lo marca como mainContact.
-        # Hay que promoverlo explícitamente para que el cliente pueda comprar como B2B.
-        contact_gid = (
-            (assign_data.get("companyAssignCustomerAsContact") or {})
-            .get("companyContact", {})
-            .get("id")
-        )
-        if not contact_gid:
-            # Shopify a veces devuelve companyContact: null (p. ej. si el cliente ya era
-            # contacto). Consultamos los contactos actuales de la company para obtener el GID.
-            info = get_company_contact_info(shop_domain, access_token, str(company_gid))
-            if info:
-                contact_gid = _find_contact_gid_by_customer(
-                    info.get("contacts") or [], existing_numeric
-                )
-        if not contact_gid:
-            raise ShopifyAPIError(
-                422,
-                {
-                    "message": (
-                        "No se pudo determinar el CompanyContact para asignar mainContact; "
-                        "el cliente no tendría permiso de compra B2B."
-                    )
-                },
-            )
-        set_main_contact(shop_domain, access_token, str(company_gid), contact_gid)
-
-        loc_gids_existing = _extract_location_gids(comp)
-        assign_contact_ordering_role(
-            shop_domain, access_token, contact_gid, loc_gids_existing,
             company_gid=str(company_gid),
+            customer_numeric=existing_numeric,
+            location_gids=_extract_location_gids(comp),
         )
-
-        return _shopify_b2b_ids(existing_numeric, str(company_gid), loc_gids_existing)
 
     fn = (first_name or "").strip()
     ln = (last_name or "").strip()
@@ -1224,6 +1497,21 @@ def ensure_shopify_b2b_company(
         {"input": _omit_none_nested(create_input)},
     )
     errs = _company_user_errors(data)
+
+    # El teléfono es único por Customer en Shopify: si ya lo usa otro cliente
+    # (con distinto email) la creación falla con TAKEN. El número igual queda
+    # registrado en la CompanyLocation, así que reintentamos sin `phone` en el
+    # contacto en vez de bloquear la aprobación de la solicitud.
+    if errs and ph_c and _es_error_telefono_tomado(errs):
+        contact_block.pop("phone", None)
+        data = _graphql_request(
+            shop_domain,
+            access_token,
+            MUTATION_COMPANY_CREATE,
+            {"input": _omit_none_nested(create_input)},
+        )
+        errs = _company_user_errors(data)
+
     comp = (data.get("companyCreate") or {}).get("company") or {}
     company_gid = comp.get("id")
     main = comp.get("mainContact") or {}

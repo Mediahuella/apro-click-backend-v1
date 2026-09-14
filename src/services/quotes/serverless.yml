@@ -42,6 +42,15 @@ provider:
     # APRO IA (DMS externo): URL base y token Bearer para sincronizar cotizaciones y obtener PDF.
     APRO_IA_BASE_URL: ${env:APRO_IA_BASE_URL, ''}
     APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
+    # Ambiente QA del mismo DMS (dms-qa.apro.cl). Credenciales propias: el token
+    # de produccion devuelve 403 contra QA, no son intercambiables. Si quedan
+    # vacias, el espejo a QA no corre y las rutas /qa responden ignored.
+    APRO_IA_BASE_URL_QA: ${env:APRO_IA_BASE_URL_QA, ''}
+    APRO_IA_BEARER_TOKEN_QA: ${env:APRO_IA_BEARER_TOKEN_QA, ''}
+    # RUTs (coma-separados) habilitados para QA. Es la unica puerta: el espejo
+    # de salida solo corre para estas empresas y los webhooks que entran por
+    # /qa se descartan si el RUT no esta aca. Vacio = QA apagado.
+    APRO_IA_QA_ALLOWED_RUTS: ${env:APRO_IA_QA_ALLOWED_RUTS, ''}
     # Clave que APRO IA envía en el header x-api-key de su webhook de eventos
     # (quotation.created/updated/approved/rejected). Distinta de QUOTES_PUBLIC_API_KEY.
     APRO_IA_WEBHOOK_API_KEY: ${env:APRO_IA_WEBHOOK_API_KEY, ''}
@@ -94,6 +103,27 @@ functions:
       # Rutas específicas antes que GET/PATCH /{quote_id}.
       - httpApi:
           path: /api/v1/quotes/webhooks/apro-ia
+          method: post
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia/transferencias
+          method: post
+      # Pagos con crédito: mismo payload y mismo ciclo que transferencias,
+      # cambia solo el tag del pedido en Shopify. APRO IA emite los dos
+      # documentos por separado y por eso van en rutas distintas.
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia/creditos
+          method: post
+      # Rutas del ambiente QA de APRO IA. El ambiente se decide por la URL (no
+      # por la x-api-key) para que un evento de QA no pueda entrar por la ruta
+      # productiva. Acotadas a APRO_IA_QA_ALLOWED_RUTS.
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia/qa
+          method: post
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia/qa/transferencias
+          method: post
+      - httpApi:
+          path: /api/v1/quotes/webhooks/apro-ia/qa/creditos
           method: post
       - httpApi:
           path: /api/v1/quotes/{quote_id}/pdf

@@ -7,6 +7,12 @@ precio + checkout (Shopify purga drafts inactivos tras 1 año).
 
 Estados: ``SOLICITADA → COTIZADA → INVOICE_SENT → ACEPTADA`` (o
 ``RECHAZADA``/``EXPIRADA``). Espejan ``OPEN → INVOICE_SENT → COMPLETED`` del draft.
+``PAGO_RECHAZADO`` la fija el webhook de pagos de APRO IA (transferencia o
+crédito) cuando el pago queda ``Descartada``/``Anulada``: el pedido en Shopify
+**no** se anula —sigue abierto y pendiente de pago, solo etiquetado— así que el
+estado existe para que SALES lo vea y le haga seguimiento. ``ANULADA`` queda
+para la anulación manual y para las filas anteriores a ese cambio
+(ver ``docs/Transferencias APRO IA.md``).
 
 Convención de impuestos: los precios (``requested_unit_price`` /
 ``negotiated_unit_price``) se guardan **netos** (sin IVA). El IVA 19% se calcula
@@ -42,6 +48,8 @@ QUOTE_STATUSES = (
     "ACEPTADA",
     "RECHAZADA",
     "EXPIRADA",
+    "ANULADA",
+    "PAGO_RECHAZADO",
 )
 
 
@@ -50,7 +58,8 @@ class QuoteRequest(Base, TimestampMixin, DictMixin):
     __table_args__ = (
         CheckConstraint(
             "status IN ('SOLICITADA', 'COTIZADA', 'INVOICE_SENT', "
-            "'ACEPTADA', 'RECHAZADA', 'EXPIRADA')",
+            "'ACEPTADA', 'RECHAZADA', 'EXPIRADA', 'ANULADA', "
+            "'PAGO_RECHAZADO')",
             name="ck_quote_requests_status",
         ),
     )
@@ -126,6 +135,44 @@ class QuoteRequest(Base, TimestampMixin, DictMixin):
     #: reemplaza ``status`` (ciclo Shopify/draft); es informativo del DMS externo.
     apro_ia_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    #: Identificadores del **espejo en el ambiente QA** de APRO IA
+    #: (``dms-qa.apro.cl``). Solo se pueblan para las empresas de
+    #: ``APRO_IA_QA_ALLOWED_RUTS``. Van aparte de ``apro_ia_id``/
+    #: ``apro_ia_folio`` a propósito: QA y producción son secuencias de IDs
+    #: independientes y un ``id`` de QA puede colisionar con el de una
+    #: cotización real de otro cliente. El webhook de la ruta ``/qa`` matchea
+    #: solo contra estas columnas y el de producción solo contra las otras.
+    apro_ia_qa_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    apro_ia_qa_folio: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True
+    )
+
+    #: Folio interno que APRO IA asigna al **documento de pago** (transferencia
+    #: o crédito), distinto de ``apro_ia_folio`` (folio de la cotización/OC).
+    #: Lo reporta el webhook de pagos.
+    transfer_folio: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    #: Último estado reportado para ese documento de pago (``Aprobada``,
+    #: ``Descartada``/``En papelera``, ``Anulada``). Crudo, tal cual lo envía
+    #: APRO IA — la normalización vive en el servicio.
+    transfer_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Momento en que el pedido de Shopify quedó marcado como pagado
+    #: (``orderMarkAsPaid`` exitoso). Sirve de guarda de idempotencia ante
+    #: reintentos del webhook.
+    transfer_paid_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Medio de pago que confirmó APRO IA sobre las columnas ``transfer_*``:
+    #: ``transferencia`` o ``credito``. Los dos webhooks comparten esas
+    #: columnas porque el ciclo es idéntico (confirmar o anular un pedido que
+    #: nació impago del checkout); esta columna es lo único que los distingue
+    #: a posteriori. ``NULL`` en las filas previas a la migración ``029``, que
+    #: por definición son transferencias.
+    payment_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     company = relationship("Company")
     lines = relationship(
         "QuoteRequestLine",
@@ -137,6 +184,11 @@ class QuoteRequest(Base, TimestampMixin, DictMixin):
     def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
         data["lines"] = [ln.to_dict() for ln in (self.lines or [])]
+        # Nombre de la empresa CRM. El frontend no debe resolverlo cruzando
+        # ``company_id`` contra su listado de empresas: ese viene paginado y,
+        # cuando la empresa cae fuera, la tabla terminaba mostrando el nombre
+        # de la persona que pidió la cotización en vez del de la empresa.
+        data["company_name"] = self.company.name if self.company else None
         return data
 
 

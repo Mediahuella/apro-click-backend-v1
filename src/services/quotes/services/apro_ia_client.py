@@ -26,18 +26,54 @@ from aws_lambda_powertools import Logger
 logger = Logger()
 
 
-def _base_url() -> str:
-    url = (os.environ.get("APRO_IA_BASE_URL") or "").strip().rstrip("/")
+#: Ambiente productivo del DMS. Es el default de todas las funciones: ningún
+#: llamador existente cambia de comportamiento al agregarse el soporte de QA.
+ENV_PROD = "prod"
+#: Ambiente de pruebas del DMS (``dms-qa.apro.cl``). Solo se usa para las
+#: empresas de la allowlist ``APRO_IA_QA_ALLOWED_RUTS`` — ver
+#: ``quote_service._espejar_en_qa``.
+ENV_QA = "qa"
+
+#: Sufijo de las variables de entorno por ambiente. QA usa credenciales
+#: propias: el bearer token de producción devuelve ``403 Token inválido``
+#: contra ``dms-qa.apro.cl`` (verificado), no son intercambiables.
+_ENV_SUFFIX = {ENV_PROD: "", ENV_QA: "_QA"}
+
+
+def _env_var(nombre: str, env: str) -> str:
+    try:
+        sufijo = _ENV_SUFFIX[env]
+    except KeyError:
+        raise ValueError(f"Ambiente APRO IA desconocido: {env}") from None
+    return f"{nombre}{sufijo}"
+
+
+def _base_url(env: str = ENV_PROD) -> str:
+    var = _env_var("APRO_IA_BASE_URL", env)
+    url = (os.environ.get(var) or "").strip().rstrip("/")
     if not url:
-        raise RuntimeError("APRO_IA_BASE_URL no está configurado en el entorno")
+        raise RuntimeError(f"{var} no está configurado en el entorno")
     return url
 
 
-def _token() -> str:
-    tok = (os.environ.get("APRO_IA_BEARER_TOKEN") or "").strip()
+def _token(env: str = ENV_PROD) -> str:
+    var = _env_var("APRO_IA_BEARER_TOKEN", env)
+    tok = (os.environ.get(var) or "").strip()
     if not tok:
-        raise RuntimeError("APRO_IA_BEARER_TOKEN no está configurado en el entorno")
+        raise RuntimeError(f"{var} no está configurado en el entorno")
     return tok
+
+
+def env_configurado(env: str) -> bool:
+    """``True`` si ese ambiente tiene base URL y token cargados.
+
+    Permite deployar con QA sin credenciales todavía: el espejo se saltea en
+    silencio en vez de fallar en cada cotización.
+    """
+    try:
+        return bool(_base_url(env) and _token(env))
+    except (RuntimeError, ValueError):
+        return False
 
 
 def _request(
@@ -46,16 +82,17 @@ def _request(
     body: dict | None = None,
     *,
     timeout: int = 15,
+    env: str = ENV_PROD,
 ) -> tuple[int, Any]:
     """Realiza la petición y devuelve (status_code, parsed_body).
 
     Para respuestas application/pdf devuelve (status, bytes).
     Lanza RuntimeError en errores HTTP o de red.
     """
-    url = f"{_base_url()}{path}"
+    url = f"{_base_url(env)}{path}"
     data = json.dumps(body).encode() if body is not None else None
     headers = {
-        "Authorization": f"Bearer {_token()}",
+        "Authorization": f"Bearer {_token(env)}",
         "Content-Type": "application/json",
     }
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -73,9 +110,9 @@ def _request(
             msg = payload.get("message") or str(payload)
         except Exception:
             msg = raw.decode(errors="replace")
-        raise RuntimeError(f"APRO IA HTTP {exc.code}: {msg}") from exc
+        raise RuntimeError(f"APRO IA[{env}] HTTP {exc.code}: {msg}") from exc
     except Exception as exc:
-        raise RuntimeError(f"APRO IA error de red: {exc}") from exc
+        raise RuntimeError(f"APRO IA[{env}] error de red: {exc}") from exc
 
 
 def _normalize_response(data: dict) -> dict:
@@ -99,6 +136,7 @@ def crear_cotizacion(
     seller_sap_code: str,
     productos: list[dict[str, Any]],
     comment: str | None = None,
+    env: str = ENV_PROD,
 ) -> dict[str, Any]:
     """Crea una cotización en APRO IA y devuelve el objeto ``data``.
 
@@ -116,15 +154,15 @@ def crear_cotizacion(
     if comment:
         body["comment"] = comment
 
-    status, resp = _request("POST", "/quotation/aproclick", body)
+    status, resp = _request("POST", "/quotation/aproclick", body, env=env)
     if status not in (200, 201) or not resp.get("success"):
         raise RuntimeError(f"APRO IA crear falló (status {status}): {resp.get('message')}")
     return _normalize_response(resp["data"])
 
 
-def obtener_cotizacion(folio: str) -> dict[str, Any]:
+def obtener_cotizacion(folio: str, *, env: str = ENV_PROD) -> dict[str, Any]:
     """Devuelve el objeto ``data`` de la cotización con ese folio."""
-    _, resp = _request("GET", f"/quotation/aproclick/{folio}")
+    _, resp = _request("GET", f"/quotation/aproclick/{folio}", env=env)
     if not resp.get("success"):
         raise RuntimeError(f"APRO IA obtener falló: {resp.get('message')}")
     return _normalize_response(resp["data"])
@@ -135,21 +173,24 @@ def editar_cotizacion(
     *,
     productos: list[dict[str, Any]],
     comment: str | None = None,
+    env: str = ENV_PROD,
 ) -> dict[str, Any]:
     """Actualiza productos y comentario de una cotización existente. Devuelve ``data``."""
     body: dict[str, Any] = {"products": productos}
     if comment is not None:
         body["comment"] = comment
 
-    status, resp = _request("PATCH", f"/quotation/aproclick/{folio}", body)
+    status, resp = _request("PATCH", f"/quotation/aproclick/{folio}", body, env=env)
     if status not in (200, 201) or not resp.get("success"):
         raise RuntimeError(f"APRO IA editar falló (status {status}): {resp.get('message')}")
     return _normalize_response(resp["data"])
 
 
-def descargar_pdf(folio: str) -> bytes:
+def descargar_pdf(folio: str, *, env: str = ENV_PROD) -> bytes:
     """Descarga el PDF de la cotización y devuelve los bytes raw."""
-    status, raw = _request("GET", f"/quotation/aproclick/download/{folio}", timeout=20)
+    status, raw = _request(
+        "GET", f"/quotation/aproclick/download/{folio}", timeout=20, env=env
+    )
     if not isinstance(raw, bytes):
         raise RuntimeError(f"APRO IA download: respuesta inesperada (status {status})")
     if not raw.startswith(b"%PDF"):

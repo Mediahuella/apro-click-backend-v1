@@ -43,6 +43,12 @@ class _ShopifyOrderIdAsText(TypeDecorator[str]):
         return str(value)
 
 
+#: Nombre con el que Shopify identifica el medio de pago manual de transferencia.
+#: El cliente lo ve traducido en el checkout, pero la API siempre reporta este valor.
+#: Es el mismo gateway que dispara el webhook de transferencias de APRO IA.
+BANK_TRANSFER_GATEWAY = "bank deposit"
+
+
 class ShopifyOrder(Base, TimestampMixin, DictMixin):
     __tablename__ = "shopify_orders"
     __table_args__ = (
@@ -102,6 +108,15 @@ class ShopifyOrder(Base, TimestampMixin, DictMixin):
         nullable=True,
         doc="Líneas de envío (título, precio, código) sincronizadas desde Shopify.",
     )
+    payment_gateway_names: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        doc=(
+            "Medios de pago del pedido tal como los nombra Shopify "
+            "(`payment_gateway_names`), ej. ['Bank Deposit'], "
+            "['Transbank Webpay']. Un pedido puede tener más de uno."
+        ),
+    )
 
     company = relationship("Company", back_populates="shopify_orders")
     last_intervened_by_user = relationship(
@@ -130,4 +145,17 @@ class ShopifyOrder(Base, TimestampMixin, DictMixin):
                         item[key] = str(item[key])
                 normalized.append(item)
             data["line_items"] = normalized
+
+        gateways = data.get("payment_gateway_names")
+        gateways = [str(g) for g in gateways if g] if isinstance(gateways, list) else []
+        data["payment_gateway_names"] = gateways
+        # La UI no debería tener que conocer el nombre interno del gateway.
+        data["is_bank_transfer"] = any(
+            g.strip().lower() == BANK_TRANSFER_GATEWAY for g in gateways
+        )
+
+        # Nombre de la empresa CRM: sin esto el frontend tiene que cruzar el UUID
+        # contra su propio listado de empresas, que viene paginado y deja pedidos
+        # mostrando el UUID pelado cuando la empresa cae fuera de la página.
+        data["company_name"] = self.company.name if self.company else None
         return data

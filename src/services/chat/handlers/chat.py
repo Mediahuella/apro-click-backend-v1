@@ -8,6 +8,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
 from aws_lambda_powertools.event_handler.exceptions import (
     BadRequestError,
+    ForbiddenError,
     InternalServerError,
     NotFoundError,
     UnauthorizedError,
@@ -123,6 +124,10 @@ def public_post():
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error en chat público (post)")
         raise InternalServerError("Error al enviar mensaje")
@@ -173,6 +178,10 @@ def public_list_conversations():
     except (ValueError, TypeError) as e:
         raise BadRequestError(str(e))
     except BadRequestError:
+        raise
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
         raise
     except Exception:
         logger.exception("Error en chat público (listado conversaciones)")
@@ -226,6 +235,10 @@ def public_list(conv_id: str):
         raise NotFoundError(str(e))
     except BadRequestError:
         raise
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error en chat público (list)")
         raise InternalServerError("Error al listar mensajes")
@@ -249,6 +262,10 @@ def staff_list_conversations():
         raise UnauthorizedError(str(e))
     except (ValueError, TypeError) as e:
         raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error listando conversaciones")
         raise InternalServerError("Error al listar conversaciones")
@@ -273,6 +290,10 @@ def staff_list_messages(conv_id: str):
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error listando mensajes (panel)")
         raise InternalServerError("Error al listar mensajes")
@@ -299,6 +320,10 @@ def staff_patch_conversation(conv_id: str):
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error actualizando conversación (panel)")
         raise InternalServerError("Error al actualizar conversación")
@@ -330,6 +355,10 @@ def staff_post(conv_id: str):
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error enviando mensaje (panel)")
         raise InternalServerError("Error al enviar mensaje")
@@ -379,6 +408,10 @@ def public_request_upload(conv_id: str):
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error generando upload URL (público)")
         raise InternalServerError("Error al generar URL de subida")
@@ -405,6 +438,10 @@ def staff_request_upload(conv_id: str):
         raise BadRequestError(str(e))
     except LookupError as e:
         raise NotFoundError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error generando upload URL")
         raise InternalServerError("Error al generar URL de subida")

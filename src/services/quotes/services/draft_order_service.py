@@ -209,13 +209,98 @@ query variantePorSKU($query: String!) {
 """
 
 _DRAFT_ORDER_COMPLETE = """
-mutation completarDraft($id: ID!) {
-  draftOrderComplete(id: $id) {
+mutation completarDraft($id: ID!, $paymentPending: Boolean) {
+  draftOrderComplete(id: $id, paymentPending: $paymentPending) {
     draftOrder { id status order { id name } }
     userErrors { field message }
   }
 }
 """
+
+_DRAFT_ORDER_DELETE = """
+mutation eliminarDraft($input: DraftOrderDeleteInput!) {
+  draftOrderDelete(input: $input) {
+    deletedId
+    userErrors { field message }
+  }
+}
+"""
+
+_ORDER_STATUS = """
+query estadoPedido($id: ID!) {
+  order(id: $id) {
+    id
+    name
+    canMarkAsPaid
+    displayFinancialStatus
+    cancelledAt
+    tags
+    note
+  }
+}
+"""
+
+_ORDER_MARK_AS_PAID = """
+mutation marcarPedidoPagado($input: OrderMarkAsPaidInput!) {
+  orderMarkAsPaid(input: $input) {
+    order { id name canMarkAsPaid displayFinancialStatus }
+    userErrors { field message }
+  }
+}
+"""
+
+_ORDER_UPDATE = """
+mutation etiquetarPedido($input: OrderInput!) {
+  orderUpdate(input: $input) {
+    order { id name tags note }
+    userErrors { field message }
+  }
+}
+"""
+
+_ORDER_CANCEL = """
+mutation anularPedido(
+  $orderId: ID!
+  $reason: OrderCancelReason!
+  $refundMethod: OrderCancelRefundMethodInput!
+  $restock: Boolean!
+  $staffNote: String
+) {
+  orderCancel(
+    orderId: $orderId
+    reason: $reason
+    refundMethod: $refundMethod
+    restock: $restock
+    staffNote: $staffNote
+  ) {
+    job { id done }
+    orderCancelUserErrors { field message code }
+    userErrors { field message }
+  }
+}
+"""
+
+#: Tags que dejan rastro en Shopify del medio de pago (``orderMarkAsPaid`` no
+#: permite elegir gateway — el tag y la nota son la única marca posible).
+TRANSFER_TAG = "transferencia"
+CREDIT_TAG = "credito"
+
+#: Tags del pago rechazado por APRO IA. El pedido **no** se anula: queda
+#: abierto y pendiente de pago, y el tag es lo que permite filtrarlo en Shopify.
+TRANSFER_REJECTED_TAG = "transferencia-rechazada"
+CREDIT_REJECTED_TAG = "credito-rechazado"
+
+#: Etiqueta del medio de pago en la nota del pedido, por ``payment_method``.
+_PAYMENT_LABELS = {
+    TRANSFER_TAG: ("transferencia", "por transferencia"),
+    CREDIT_TAG: ("crédito", "con crédito"),
+}
+
+#: Tag de rechazo por medio de pago.
+_REJECTED_TAGS = {
+    TRANSFER_TAG: TRANSFER_REJECTED_TAG,
+    CREDIT_TAG: CREDIT_REJECTED_TAG,
+}
 
 
 def _money(value: Decimal | None, currency: str) -> dict | None:
@@ -455,13 +540,29 @@ def send_quote_invoice(session: Session, quote: QuoteRequest) -> dict:
     return result.get("draftOrder") or {}
 
 
-def complete_quote(session: Session, quote: QuoteRequest) -> dict:
-    """Completa el Draft Order (net terms) → genera la Order en Shopify."""
+def complete_quote(
+    session: Session, quote: QuoteRequest, *, payment_pending: bool = True
+) -> dict:
+    """Completa el Draft Order → genera la Order en Shopify.
+
+    ``payment_pending=True`` (default) hace que el pedido nazca **impago**: el
+    cobro real de estas cotizaciones B2B llega por transferencia bancaria y se
+    confirma después, vía el webhook de transferencias de APRO IA
+    (``mark_order_paid``). Sin esto Shopify marca el pedido como pagado en el
+    mismo momento de completar el draft, que no refleja la realidad.
+
+    ``paymentPending`` está deprecado en el schema (Shopify recomienda payment
+    terms en el draft), pero sigue siendo funcional y es la única forma de
+    dejar el pedido impago sin configurar plantillas de net terms en la tienda.
+    """
     if not quote.draft_order_gid:
         raise ValueError("La cotización no tiene Draft Order asociado")
     shop_domain, token = resolve_store_token(session, quote.shop_domain)
     data = graphql_call(
-        shop_domain, token, _DRAFT_ORDER_COMPLETE, {"id": quote.draft_order_gid}
+        shop_domain,
+        token,
+        _DRAFT_ORDER_COMPLETE,
+        {"id": quote.draft_order_gid, "paymentPending": bool(payment_pending)},
     )
     result = data.get("draftOrderComplete") or {}
     errs = result.get("userErrors") or []
@@ -472,6 +573,260 @@ def complete_quote(session: Session, quote: QuoteRequest) -> dict:
     if order.get("id"):
         quote.order_gid = order["id"]
     return draft
+
+
+def mark_order_paid(
+    session: Session,
+    order_gid: str,
+    *,
+    shop_domain: str = "",
+    transfer_folio: str = "",
+    payment_method: str = TRANSFER_TAG,
+) -> dict:
+    """Marca como pagado el pedido y lo etiqueta con el medio de pago.
+
+    ``payment_method`` es ``transferencia`` o ``credito`` (``CREDIT_TAG``):
+    define el tag y la nota que se dejan en el pedido. El resto del
+    procedimiento es idéntico para ambos medios.
+
+    Opera sobre el ``order_gid`` y no sobre la cotización: el pedido puede
+    haber nacido del checkout de Shopify (transferencia como medio de pago
+    manual, que lo deja impago) sin haber pasado nunca por un Draft Order
+    nuestro.
+
+    Idempotente: si el pedido ya está pagado (``canMarkAsPaid == False``) no
+    reintenta ``orderMarkAsPaid`` — Shopify devolvería el userError "Order
+    cannot be marked as paid" y un reintento del webhook fallaría sin motivo.
+    El tag/nota se aplica igual, porque puede ser el dato que falte.
+
+    Devuelve ``{order, already_paid}``.
+    """
+    if not order_gid:
+        raise ValueError("Falta el pedido de Shopify a marcar como pagado")
+    shop_domain, token = resolve_store_token(session, shop_domain)
+
+    current = graphql_call(
+        shop_domain, token, _ORDER_STATUS, {"id": order_gid}
+    ).get("order") or {}
+    if not current:
+        raise ValueError(f"El pedido {order_gid} no existe en Shopify")
+    if current.get("cancelledAt"):
+        raise ValueError(
+            f"El pedido {current.get('name') or order_gid} está anulado en "
+            "Shopify; no se puede marcar como pagado"
+        )
+
+    already_paid = current.get("canMarkAsPaid") is False
+    order = current
+    if not already_paid:
+        data = graphql_call(
+            shop_domain, token, _ORDER_MARK_AS_PAID, {"input": {"id": order_gid}}
+        )
+        result = data.get("orderMarkAsPaid") or {}
+        errs = result.get("userErrors") or []
+        if errs:
+            raise ValueError(f"orderMarkAsPaid: {format_user_errors(errs)}")
+        order = result.get("order") or current
+
+    _tag_order_as_payment(
+        shop_domain,
+        token,
+        order_gid,
+        current,
+        transfer_folio=transfer_folio,
+        payment_method=payment_method,
+    )
+    return {"order": order, "already_paid": already_paid}
+
+
+def _tag_order_as_payment(
+    shop_domain: str,
+    token: str,
+    order_gid: str,
+    current: dict,
+    *,
+    transfer_folio: str = "",
+    payment_method: str = TRANSFER_TAG,
+) -> None:
+    """Agrega el tag del medio de pago y anota el folio de APRO IA en el pedido.
+
+    Best-effort: si falla no se revierte el pago ya registrado, solo se loguea
+    — el pedido pagado importa más que su etiqueta.
+    """
+    tag = CREDIT_TAG if payment_method == CREDIT_TAG else TRANSFER_TAG
+    _, complemento = _PAYMENT_LABELS[tag]
+    tags = [str(t) for t in (current.get("tags") or [])]
+    note = str(current.get("note") or "").strip()
+    nota_transfer = (
+        f"Pagado {complemento} (APRO IA folio {transfer_folio})"
+        if transfer_folio
+        else f"Pagado {complemento} (APRO IA)"
+    )
+
+    order_input: dict = {"id": order_gid}
+    if tag not in [t.lower() for t in tags]:
+        order_input["tags"] = tags + [tag]
+    if nota_transfer not in note:
+        order_input["note"] = f"{note}\n{nota_transfer}".strip() if note else nota_transfer
+    if len(order_input) == 1:
+        return
+
+    try:
+        data = graphql_call(shop_domain, token, _ORDER_UPDATE, {"input": order_input})
+        errs = (data.get("orderUpdate") or {}).get("userErrors") or []
+        if errs:
+            logger.warning(
+                "No se pudo etiquetar el pedido con el medio de pago",
+                extra={
+                    "order_gid": order_gid,
+                    "tag": tag,
+                    "errors": format_user_errors(errs),
+                },
+            )
+    except Exception:
+        logger.exception(
+            "No se pudo etiquetar el pedido con el medio de pago",
+            extra={"order_gid": order_gid, "tag": tag},
+        )
+
+
+def tag_order_payment_rejected(
+    session: Session,
+    order_gid: str,
+    *,
+    shop_domain: str = "",
+    transfer_folio: str = "",
+    payment_method: str = TRANSFER_TAG,
+    raw_status: str = "",
+) -> dict:
+    """Etiqueta el pedido como pago rechazado, **sin anularlo**.
+
+    Antes un rechazo de APRO IA disparaba ``orderCancel``; hoy no. El pedido
+    nació impago (transferencia y crédito son medios manuales) y en Shopify
+    sigue figurando como pendiente de pago, que es justo el estado correcto
+    cuando el pago no se concretó: anularlo obligaba a rehacer el pedido si el
+    cliente volvía a pagar, y en APRO IA "Descartada" no siempre es terminal.
+
+    El tag (``transferencia-rechazada`` / ``credito-rechazado``) es lo que deja
+    el pedido filtrable en Shopify; la nota conserva el folio y el estado crudo
+    del DMS.
+
+    Caso de borde: si el pedido **ya estaba pagado** (llegó antes un
+    ``Aprobada``) el pago no se revierte — ``orderMarkAsPaid`` no tiene inverso
+    y un reembolso dejaría el pedido en "Reembolsado", no en "Pendiente". Se
+    etiqueta igual y la nota lo advierte para que SALES lo revise a mano.
+
+    A diferencia de ``_tag_order_as_payment``, que es best-effort sobre un pago
+    ya registrado, aquí el tag es la **única** marca del rechazo: si Shopify
+    falla se propaga el error para que el webhook responda 500 y APRO IA
+    reintente.
+
+    Devuelve ``{order, already_tagged, was_paid}``.
+    """
+    if not order_gid:
+        raise ValueError("Falta el pedido de Shopify a etiquetar")
+    shop_domain, token = resolve_store_token(session, shop_domain)
+
+    current = graphql_call(
+        shop_domain, token, _ORDER_STATUS, {"id": order_gid}
+    ).get("order") or {}
+    if not current:
+        raise ValueError(f"El pedido {order_gid} no existe en Shopify")
+
+    tag = _REJECTED_TAGS.get(payment_method, TRANSFER_REJECTED_TAG)
+    medio, _ = _PAYMENT_LABELS.get(payment_method, _PAYMENT_LABELS[TRANSFER_TAG])
+    was_paid = current.get("canMarkAsPaid") is False and not current.get("cancelledAt")
+
+    detalle = f" ({raw_status})" if raw_status else ""
+    folio_txt = f" folio {transfer_folio}" if transfer_folio else ""
+    nota_rechazo = (
+        f"Pago con {medio} rechazado en APRO IA{folio_txt}{detalle}. "
+        "El pedido queda pendiente de pago."
+    )
+    if was_paid:
+        nota_rechazo += (
+            " ATENCIÓN: el pedido ya figuraba pagado; el pago no se revirtió "
+            "automáticamente, revisar manualmente."
+        )
+
+    tags = [str(t) for t in (current.get("tags") or [])]
+    note = str(current.get("note") or "").strip()
+
+    order_input: dict = {"id": order_gid}
+    if tag not in [t.lower() for t in tags]:
+        order_input["tags"] = tags + [tag]
+    if nota_rechazo not in note:
+        order_input["note"] = f"{note}\n{nota_rechazo}".strip() if note else nota_rechazo
+    if len(order_input) == 1:
+        return {"order": current, "already_tagged": True, "was_paid": was_paid}
+
+    data = graphql_call(shop_domain, token, _ORDER_UPDATE, {"input": order_input})
+    result = data.get("orderUpdate") or {}
+    errs = result.get("userErrors") or []
+    if errs:
+        raise ValueError(f"orderUpdate: {format_user_errors(errs)}")
+    return {
+        "order": result.get("order") or current,
+        "already_tagged": False,
+        "was_paid": was_paid,
+    }
+
+
+def cancel_order(
+    session: Session, order_gid: str, *, shop_domain: str = "", staff_note: str = ""
+) -> dict:
+    """Anula el pedido de Shopify (restock, sin cobro).
+
+    ``refundMethod.originalPaymentMethodsRefund`` es inocuo cuando el pedido
+    está impago (no hay transacción que devolver) y cubre el caso de una
+    transferencia que se anula después de haber quedado pagada.
+    """
+    if not order_gid:
+        raise ValueError("Falta el pedido de Shopify a anular")
+    shop_domain, token = resolve_store_token(session, shop_domain)
+
+    current = graphql_call(
+        shop_domain, token, _ORDER_STATUS, {"id": order_gid}
+    ).get("order") or {}
+    if current.get("cancelledAt"):
+        return {"order": current, "already_cancelled": True}
+
+    data = graphql_call(
+        shop_domain,
+        token,
+        _ORDER_CANCEL,
+        {
+            "orderId": order_gid,
+            "reason": "OTHER",
+            "refundMethod": {"originalPaymentMethodsRefund": True},
+            "restock": True,
+            "staffNote": staff_note or "Transferencia anulada en APRO IA",
+        },
+    )
+    result = data.get("orderCancel") or {}
+    errs = (result.get("orderCancelUserErrors") or []) + (result.get("userErrors") or [])
+    if errs:
+        raise ValueError(f"orderCancel: {format_user_errors(errs)}")
+    return {"job": result.get("job") or {}, "already_cancelled": False}
+
+
+def delete_quote_draft(session: Session, quote: QuoteRequest) -> dict:
+    """Elimina el Draft Order de la cotización (aún no convertido en pedido)."""
+    if not quote.draft_order_gid:
+        raise ValueError("La cotización no tiene Draft Order asociado")
+    shop_domain, token = resolve_store_token(session, quote.shop_domain)
+    data = graphql_call(
+        shop_domain,
+        token,
+        _DRAFT_ORDER_DELETE,
+        {"input": {"id": quote.draft_order_gid}},
+    )
+    result = data.get("draftOrderDelete") or {}
+    errs = result.get("userErrors") or []
+    if errs:
+        raise ValueError(f"draftOrderDelete: {format_user_errors(errs)}")
+    quote.draft_order_gid = None
+    return result
 
 
 def _fetch_delivery_profiles(shop_domain: str, token: str) -> list[dict]:

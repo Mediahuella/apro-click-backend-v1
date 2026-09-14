@@ -63,6 +63,20 @@ def _require_authenticated_user() -> dict:
         raise UnauthorizedError(str(e))
 
 
+
+def _require_admin() -> dict:
+    """Alta/edición/baja de usuarios: solo SUPERADMIN o ADMIN.
+
+    Sin esto cualquiera con la URL del API podía crear un usuario del panel
+    —incluido un SUPERADMIN— porque las rutas no tienen authorizer en API
+    Gateway y el handler no miraba el ``Authorization``.
+    """
+    user = _require_authenticated_user()
+    if user.get("role") not in ("SUPERADMIN", "ADMIN"):
+        raise ForbiddenError("Sin permisos para administrar usuarios")
+    return user
+
+
 @app.get("/api/v1/users/me/referral-link")
 @tracer.capture_method
 def get_my_referral_link():
@@ -88,6 +102,7 @@ def get_my_referral_link():
 @app.post("/api/v1/users")
 @tracer.capture_method
 def create_user():
+    _require_admin()
     try:
         body = app.current_event.json_body or {}
 
@@ -128,6 +143,7 @@ def create_user():
 @app.get("/api/v1/users")
 @tracer.capture_method
 def list_users():
+    _require_authenticated_user()
     try:
         params = app.current_event.query_string_parameters or {}
         limit = int(params.get("limit", "50"))
@@ -145,6 +161,7 @@ def list_users():
 @app.get("/api/v1/users/<user_id>")
 @tracer.capture_method
 def get_user(user_id: str):
+    _require_authenticated_user()
     try:
         result = user_service.get_user(user_id)
         if not result:
@@ -161,6 +178,7 @@ def get_user(user_id: str):
 @app.put("/api/v1/users/<user_id>")
 @tracer.capture_method
 def update_user(user_id: str):
+    _require_admin()
     try:
         body = app.current_event.json_body or {}
         if not body:
@@ -183,6 +201,7 @@ def update_user(user_id: str):
 @app.post("/api/v1/users/<user_id>/link-shopify-staff")
 @tracer.capture_method
 def link_shopify_staff(user_id: str):
+    _require_admin()
     try:
         result = user_service.link_shopify_staff(user_id)
         return {
@@ -209,6 +228,7 @@ def associate_shopify_staff(user_id: str):
     Cuerpo JSON: { "shopify_staff_member_gid": "..." },
     opcional: { "skip_email_verification": true }.
     """
+    _require_admin()
     try:
         body = app.current_event.json_body or {}
         result = user_service.associate_shopify_staff(user_id, body)
@@ -230,6 +250,7 @@ def associate_shopify_staff(user_id: str):
 @app.delete("/api/v1/users/<user_id>")
 @tracer.capture_method
 def delete_user(user_id: str):
+    _require_admin()
     try:
         user_service.delete_user(user_id)
         return {"statusCode": 200, "message": "User deleted"}

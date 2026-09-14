@@ -40,6 +40,7 @@ from notifications.ses_email import (  # noqa: E402
     notify_new_request,
     notify_nueva_cotizacion,
     notify_rejection,
+    notify_transferencia_estado,
 )
 
 logger = Logger()
@@ -94,6 +95,18 @@ _HANDLERS: dict[str, Any] = {
         quote_id=p["quote_id"],
         event=p["event"],
         status=p["status"],
+    ),
+    "transferencia_estado": lambda p: notify_transferencia_estado(
+        admin_emails=p["admin_emails"],
+        company_name=p["company_name"],
+        folio=p["folio"],
+        quote_id=p["quote_id"],
+        transfer_folio=p.get("transfer_folio", ""),
+        estado=p["estado"],
+        status=p["status"],
+        # Mensajes encolados antes del webhook de créditos no traen el campo:
+        # por definición son transferencias.
+        payment_method=p.get("payment_method", "transferencia"),
     ),
 }
 

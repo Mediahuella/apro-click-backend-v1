@@ -173,3 +173,34 @@ def encolar_cotizacion_apro_ia_estado(
             "status": status,
         },
     )
+
+
+def encolar_transferencia_estado(
+    admin_emails: list[str],
+    company_name: str,
+    folio: str,
+    quote_id: str,
+    transfer_folio: str,
+    estado: str,
+    status: str,
+    payment_method: str = "transferencia",
+) -> None:
+    """Encola aviso a SALES/admins del resultado de un pago reportado por APRO IA.
+
+    ``estado`` es el normalizado (``APROBADA``/``ANULADA``) y ``status`` el
+    texto crudo que envió el DMS. ``payment_method`` (``transferencia`` o
+    ``credito``) solo cambia los textos del correo.
+    """
+    _encolar(
+        "transferencia_estado",
+        {
+            "admin_emails": admin_emails,
+            "company_name": company_name,
+            "folio": folio,
+            "quote_id": quote_id,
+            "transfer_folio": transfer_folio,
+            "estado": estado,
+            "status": status,
+            "payment_method": payment_method,
+        },
+    )

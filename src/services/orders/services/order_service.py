@@ -12,7 +12,7 @@ from typing import Any
 import sqlalchemy as sa
 from aws_lambda_powertools import Logger
 from sqlalchemy import and_, desc, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 logger = Logger()
 
@@ -142,6 +142,23 @@ def _shipping_lines_for_storage(order: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _payment_gateways_for_storage(order: dict[str, Any]) -> list[str]:
+    """Medios de pago del pedido, normalizados a lista de strings.
+
+    Shopify manda ``payment_gateway_names`` en el webhook REST y
+    ``paymentGatewayNames`` en GraphQL; un pedido puede tener más de uno
+    (ej. Webpay + Mercado Pago). ``["Bank Deposit"]`` es la transferencia.
+    """
+    raw = order.get("payment_gateway_names")
+    if raw is None:
+        raw = order.get("paymentGatewayNames")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(g).strip() for g in raw if str(g or "").strip()]
 
 
 def _total_from_payload(order: dict[str, Any]) -> Decimal | None:
@@ -306,6 +323,7 @@ def upsert_from_shopify_payload(
     updated = _parse_shopify_ts(
         order.get("updated_at") or order.get("updatedAt")
     )
+    gateways = _payment_gateways_for_storage(order)
 
     with get_session() as session:
         inst = session.scalar(
@@ -347,6 +365,7 @@ def upsert_from_shopify_payload(
             row.company_id = company_id
         row.line_items = lines
         row.shipping_lines = shipping if shipping else None
+        row.payment_gateway_names = gateways or None
         # Cierre del ciclo de cotización (best-effort) si el pedido viene de un draft.
         _close_quote_for_order(
             session,
@@ -390,6 +409,7 @@ def list_orders_for_user(
     offset: int,
     status: str | None,
     company_id: str | None,
+    q_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Lista pedidos visibles al usuario autenticado (token Cognito → usuario BD).
@@ -420,12 +440,100 @@ def list_orders_for_user(
                 q = q.where(ShopifyOrder.company_id == cf)
         if status in ("PENDING", "CLOSED"):
             q = q.where(ShopifyOrder.internal_status == status)
+        if q_text and q_text.strip():
+            like = f"%{q_text.strip()}%"
+            q = q.where(
+                sa.or_(
+                    ShopifyOrder.order_name.ilike(like),
+                    ShopifyOrder.email.ilike(like),
+                )
+            )
         q = q.order_by(
             desc(ShopifyOrder.shopify_updated_at), desc(ShopifyOrder.created_at)
         )
         q = q.offset(offset).limit(min(max(limit, 1), 200))
+        # company_name sale de la relación en to_dict(); sin este eager-load
+        # serían hasta 200 SELECT extra por request.
+        q = q.options(selectinload(ShopifyOrder.company))
         rows = list(session.scalars(q).all())
     return [r.to_dict() for r in rows]
+
+
+def get_order_stats_for_user(user: dict[str, Any]) -> dict[str, Any]:
+    """Contadores y montos agregados de pedidos visibles al usuario (dashboard / KPIs de ventas)."""
+    with get_session() as session:
+        scope = _scoped_where(user)
+
+        def _count(*extra: Any) -> int:
+            stmt = select(sa.func.count()).select_from(ShopifyOrder).where(scope, *extra)
+            return int(session.scalar(stmt) or 0)
+
+        def _total(*extra: Any) -> str:
+            stmt = (
+                select(sa.func.coalesce(sa.func.sum(ShopifyOrder.total_price), 0))
+                .select_from(ShopifyOrder)
+                .where(scope, *extra)
+            )
+            return str(session.scalar(stmt) or 0)
+
+        today_filter = ShopifyOrder.created_at >= sa.func.date_trunc(
+            "day", sa.func.now()
+        )
+        week_filter = ShopifyOrder.created_at >= sa.func.date_trunc(
+            "week", sa.func.now()
+        )
+        pending_payment_filter = sa.func.lower(ShopifyOrder.financial_status).in_(
+            ["pending", "unpaid", "partially_paid"]
+        )
+
+        today_count = _count(today_filter)
+        week_count = _count(week_filter)
+        pending_payment_count = _count(pending_payment_filter)
+        today_total = _total(today_filter)
+        week_total = _total(week_filter)
+    return {
+        "today_count": today_count,
+        "week_count": week_count,
+        "pending_payment_count": pending_payment_count,
+        "today_total": today_total,
+        "week_total": week_total,
+    }
+
+
+def _company_block(company: Company | None) -> dict[str, Any] | None:
+    """Ficha de la empresa CRM para el detalle del pedido.
+
+    Solo se arma en el detalle, no en el listado: resolver el contacto principal
+    implica recorrer ``clients`` y serían N consultas extra por página.
+
+    ``contact_email`` es el del **contacto principal de la empresa**
+    (``Client.is_main_contact``), distinto de ``ShopifyOrder.email``, que es el
+    del comprador que hizo el checkout — pueden no coincidir en B2B.
+    """
+    if company is None:
+        return None
+
+    contacto = None
+    for cli in company.clients or []:
+        if cli.is_main_contact:
+            contacto = cli
+            break
+    if contacto is None:
+        # Sin principal marcado: el primero con email sirve de referencia.
+        contacto = next(
+            (c for c in (company.clients or []) if (c.email or "").strip()), None
+        )
+
+    return {
+        "id": str(company.id),
+        "name": company.name,
+        "billing_razon_social": company.billing_razon_social,
+        "billing_rut": company.billing_rut,
+        "contact_email": (contacto.email if contacto else None) or None,
+        "contact_name": (contacto.name if contacto else None) or None,
+        "contact_phone": (contacto.phone if contacto else None) or None,
+        "is_main_contact": bool(contacto.is_main_contact) if contacto else False,
+    }
 
 
 def get_order_for_user(user: dict[str, Any], order_id: str) -> dict[str, Any] | None:
@@ -438,7 +546,9 @@ def get_order_for_user(user: dict[str, Any], order_id: str) -> dict[str, Any] | 
         row = get_order_by_id(session, order_id)
         if not row or not can_read_order(user, row):
             return None
-        return row.to_dict()
+        data = row.to_dict()
+        data["company"] = _company_block(row.company)
+        return data
 
 
 def apply_order_updates(

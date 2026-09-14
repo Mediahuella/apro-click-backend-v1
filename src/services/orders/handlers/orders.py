@@ -38,6 +38,7 @@ from services.order_service import (  # noqa: E402
     fulfill_order,
     get_line_item_featured_images_for_order,
     get_order_for_user,
+    get_order_stats_for_user,
     list_orders_for_user,
     send_order_invoice,
 )
@@ -89,8 +90,14 @@ def list_orders():
         # Alcance: usuario Cognito + user_companies (user["order_company_ids"]).
         # company_id en query es opcional (refinar); no hace falta para filtrar por empresas asignadas.
         company_id = params.get("company_id")
+        q_text = params.get("q")
         data = list_orders_for_user(
-            user, limit=limit, offset=offset, status=status, company_id=company_id
+            user,
+            limit=limit,
+            offset=offset,
+            status=status,
+            company_id=company_id,
+            q_text=q_text,
         )
         return {"statusCode": 200, "message": "OK", "data": data}
     except UnauthorizedError:
@@ -100,6 +107,20 @@ def list_orders():
     except Exception:
         logger.exception("Error listando pedidos")
         raise InternalServerError("Error listando pedidos")
+
+
+@app.get("/api/v1/orders/stats")
+@tracer.capture_method
+def order_stats():
+    try:
+        user = _require_reader()
+        data = get_order_stats_for_user(user)
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except UnauthorizedError:
+        raise
+    except Exception:
+        logger.exception("Error obteniendo estadísticas de pedidos")
+        raise InternalServerError("Error obteniendo estadísticas de pedidos")
 
 
 @app.get("/api/v1/orders/<order_id>/line-images")

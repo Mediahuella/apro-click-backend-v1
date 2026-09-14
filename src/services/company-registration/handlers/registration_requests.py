@@ -8,6 +8,7 @@ from aws_lambda_powertools import Logger, Tracer
 from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
 from aws_lambda_powertools.event_handler.exceptions import (
     BadRequestError,
+    ForbiddenError,
     InternalServerError,
     NotFoundError,
     UnauthorizedError,
@@ -82,6 +83,10 @@ def create_request():
         raise UnauthorizedError(str(e))
     except ValueError as e:
         raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error creando solicitud de empresa")
         raise InternalServerError("Error creando solicitud")
@@ -108,6 +113,10 @@ def list_requests():
         raise UnauthorizedError(str(e))
     except ValueError as e:
         raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error listando solicitudes")
         raise InternalServerError("Error listando solicitudes")
@@ -129,6 +138,10 @@ def referral_stats():
         return {"statusCode": 200, "message": "OK", "data": data}
     except PermissionError as e:
         raise UnauthorizedError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error obteniendo referral stats")
         raise InternalServerError("Error obteniendo referral stats")
@@ -145,6 +158,10 @@ def get_request(request_id: str):
         return {"statusCode": 200, "message": "OK", "data": row}
     except PermissionError as e:
         raise UnauthorizedError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error obteniendo solicitud")
         raise InternalServerError("Error obteniendo solicitud")
@@ -177,6 +194,10 @@ def approve_request(request_id: str):
         raise UnauthorizedError(str(e))
     except ValueError as e:
         raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
+        raise
     except Exception:
         logger.exception("Error aprobando solicitud")
         raise InternalServerError("Error aprobando solicitud")
@@ -204,6 +225,10 @@ def reject_request(request_id: str):
     except ValueError as e:
         raise BadRequestError(str(e))
     except BadRequestError:
+        raise
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError):
+        # Las respuestas HTTP explícitas (401/403/400/404) no son errores
+        # internos: sin este re-raise salían como 500.
         raise
     except Exception:
         logger.exception("Error rechazando solicitud")

@@ -29,8 +29,38 @@ provider:
     SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
     SHOPIFY_SHOP: ${env:SHOPIFY_SHOP, ''}
     COMPANIES_PUBLIC_API_KEY: ${env:COMPANIES_PUBLIC_API_KEY, ''}
+    # Créditos en el DMS de APRO: quién tiene crédito vigente. Es la fuente de
+    # verdad de `payment_type` y, por lo tanto, de si el crédito se ve en el
+    # checkout. Sin configuración, la sincronización no corre y nada cambia.
+    APRO_CREDIT_BASE_URL: ${env:APRO_CREDIT_BASE_URL, ''}
+    # Sin default acá: las llaves de `{rut}` las toma el parser de Serverless
+    # como una variable suya. El default vive en shared/apro/credit_client.py.
+    APRO_CREDIT_PATH_TEMPLATE: ${env:APRO_CREDIT_PATH_TEMPLATE, ''}
+    APRO_CREDIT_BEARER_TOKEN: ${env:APRO_CREDIT_BEARER_TOKEN, ''}
+    # RUTs que siempre se consideran con crédito (empresas de prueba).
+    APRO_CREDIT_FORCE_RUTS: ${env:APRO_CREDIT_FORCE_RUTS, ''}
+  iam:
+    role:
+      statements:
+        # Las rutas de panel validan el Access Token en el handler
+        # (no hay authorizer en API Gateway).
+        - Effect: Allow
+          Action:
+            - cognito-idp:GetUser
+          Resource:
+            Fn::ImportValue: apro-click-${self:provider.stage}-cognito-user-pool-arn
 
 functions:
+  # Sincroniza a diario `payment_type` con los créditos del DMS de APRO.
+  creditSync:
+    handler: handlers/credit_sync.lambda_handler
+    timeout: 900
+    memorySize: 512
+    events:
+      - schedule:
+          rate: rate(1 day)
+          enabled: true
+
   health:
     handler: handlers/health.lambda_handler
     events:
@@ -112,4 +142,8 @@ functions:
           method: delete
       - httpApi:
           path: /api/v1/storefront/company/contacts
+          method: get
+      # Crédito de la empresa para el checkout (extension credito-b2b).
+      - httpApi:
+          path: /api/v1/storefront/company/credit
           method: get
