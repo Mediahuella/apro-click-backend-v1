@@ -33,13 +33,12 @@ provider:
     # APRO IA (DMS externo) — API de clientes (host distinto al de `quotes`, mismo token Bearer).
     APRO_IA_CLIENTS_BASE_URL: ${env:APRO_IA_CLIENTS_BASE_URL, ''}
     APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
-    # APRO — servicio de créditos: define si la empresa nueva nace con crédito.
-    # Host y token propios, distintos de los del DMS de documentos.
-    APRO_CREDIT_BASE_URL: ${env:APRO_CREDIT_BASE_URL, ''}
-    # Sin default acá: las llaves de `{rut}` las toma el parser de Serverless
-    # como una variable suya. El default vive en shared/apro/credit_client.py.
+    # Créditos de APRO: define si la empresa nueva nace con crédito. Reusa el
+    # host (APRO_IA_CLIENTS_BASE_URL) y el token de la API de clientes de acá
+    # arriba; solo agrega lo propio de créditos.
+    # Sin default en la ruta: las llaves de `{rut}` las toma el parser de
+    # Serverless como una variable suya (el default está en el cliente).
     APRO_CREDIT_PATH_TEMPLATE: ${env:APRO_CREDIT_PATH_TEMPLATE, ''}
-    APRO_CREDIT_BEARER_TOKEN: ${env:APRO_CREDIT_BEARER_TOKEN, ''}
     APRO_CREDIT_FORCE_RUTS: ${env:APRO_CREDIT_FORCE_RUTS, ''}
     # Cola SQS del servicio notifications para envío de emails
     NOTIFICATIONS_QUEUE_URL:

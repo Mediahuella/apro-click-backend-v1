@@ -19,9 +19,13 @@ logger = Logger()
 
 
 def _base_url() -> str:
-    url = (os.environ.get("DMS_INVOICES_BASE_URL") or "https://dms.apro.cl").strip().rstrip("/")
+    # Mismo host que usa `quotes` para las cotizaciones: es el único DMS de
+    # APRO. Antes esto tenía su propia variable (`DMS_INVOICES_BASE_URL`) con
+    # el mismo valor, y dos variables para un solo host solo dan lugar a que se
+    # desincronicen.
+    url = (os.environ.get("APRO_IA_BASE_URL") or "https://dms.apro.cl").strip().rstrip("/")
     if not url:
-        raise RuntimeError("DMS_INVOICES_BASE_URL no está configurado en el entorno")
+        raise RuntimeError("APRO_IA_BASE_URL no está configurado en el entorno")
     return url
 
 

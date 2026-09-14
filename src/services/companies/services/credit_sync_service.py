@@ -46,7 +46,11 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
-from apro.credit_client import consultar_credito, esta_configurado  # noqa: E402
+from apro.credit_client import (  # noqa: E402
+    ENV_PROD,
+    consultar_credito,
+    esta_configurado,
+)
 from database.engine import get_session  # noqa: E402
 from database.models.company import Company  # noqa: E402
 from sqlalchemy import select  # noqa: E402
@@ -64,13 +68,13 @@ def payment_type_para(tiene_credito: bool) -> str:
     return PAYMENT_TYPE_CREDIT if tiene_credito else PAYMENT_TYPE_DIRECT
 
 
-def resolver_payment_type(rut: str) -> str | None:
+def resolver_payment_type(rut: str, *, env: str = ENV_PROD) -> str | None:
     """Consulta el DMS y devuelve el ``payment_type`` que corresponde.
 
     ``None`` si no se pudo determinar (sin configuración, DMS caído): el
     llamador debe dejar la empresa como está.
     """
-    credito = consultar_credito(rut)
+    credito = consultar_credito(rut, env=env)
     if credito is None:
         return None
     return payment_type_para(bool(credito.get("tiene_credito")))
@@ -128,7 +132,7 @@ def sincronizar_empresa(
 
 
 def consultar_en_paralelo(
-    ruts: list[str], *, max_workers: int = 8
+    ruts: list[str], *, env: str = ENV_PROD, max_workers: int = 8
 ) -> dict[str, str | None]:
     """``{rut: payment_type|None}`` consultando el DMS en paralelo.
 
@@ -140,7 +144,9 @@ def consultar_en_paralelo(
     if not ruts:
         return destinos
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futuros = {pool.submit(resolver_payment_type, rut): rut for rut in ruts}
+        futuros = {
+            pool.submit(resolver_payment_type, rut, env=env): rut for rut in ruts
+        }
         for futuro in as_completed(futuros):
             rut = futuros[futuro]
             try:

@@ -29,14 +29,17 @@ provider:
     SHOPIFY_API_VERSION: ${env:SHOPIFY_API_VERSION, '2026-04'}
     SHOPIFY_SHOP: ${env:SHOPIFY_SHOP, ''}
     COMPANIES_PUBLIC_API_KEY: ${env:COMPANIES_PUBLIC_API_KEY, ''}
-    # Créditos en el DMS de APRO: quién tiene crédito vigente. Es la fuente de
-    # verdad de `payment_type` y, por lo tanto, de si el crédito se ve en el
-    # checkout. Sin configuración, la sincronización no corre y nada cambia.
-    APRO_CREDIT_BASE_URL: ${env:APRO_CREDIT_BASE_URL, ''}
+    # Créditos de APRO: quién tiene crédito vigente. Es la fuente de verdad de
+    # `payment_type` y, por lo tanto, de si el crédito se ve en el checkout.
+    # Reusa host y token de la API de clientes (mismo servicio, otra ruta).
+    # Sin configuración, la sincronización no corre y nada cambia.
+    APRO_IA_CLIENTS_BASE_URL: ${env:APRO_IA_CLIENTS_BASE_URL, ''}
+    APRO_IA_CLIENTS_BASE_URL_QA: ${env:APRO_IA_CLIENTS_BASE_URL_QA, ''}
+    APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
+    APRO_IA_BEARER_TOKEN_QA: ${env:APRO_IA_BEARER_TOKEN_QA, ''}
     # Sin default acá: las llaves de `{rut}` las toma el parser de Serverless
     # como una variable suya. El default vive en shared/apro/credit_client.py.
     APRO_CREDIT_PATH_TEMPLATE: ${env:APRO_CREDIT_PATH_TEMPLATE, ''}
-    APRO_CREDIT_BEARER_TOKEN: ${env:APRO_CREDIT_BEARER_TOKEN, ''}
     # RUTs que siempre se consideran con crédito (empresas de prueba).
     APRO_CREDIT_FORCE_RUTS: ${env:APRO_CREDIT_FORCE_RUTS, ''}
   iam:

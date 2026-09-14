@@ -18,12 +18,15 @@ Uso:
   python3 scripts/backfill_company_credit_from_dms.py --dry-run   # reporta, no escribe
   python3 scripts/backfill_company_credit_from_dms.py             # aplica
   python3 scripts/backfill_company_credit_from_dms.py --rut 76486379-8
+  python3 scripts/backfill_company_credit_from_dms.py --qa --dry-run  # contra QA
 
 Variables de entorno (desde .env raíz o shell):
-  DATABASE_URL              — PostgreSQL (obligatoria)
-  APRO_CREDIT_BASE_URL      — host del servicio de créditos
-  APRO_CREDIT_BEARER_TOKEN  — token Bearer
-  APRO_CREDIT_FORCE_RUTS    — RUTs que siempre se consideran con crédito
+  DATABASE_URL                 — PostgreSQL (obligatoria)
+  APRO_IA_CLIENTS_BASE_URL     — host del servicio (el mismo de la API de clientes)
+  APRO_IA_BEARER_TOKEN         — token Bearer
+  APRO_IA_CLIENTS_BASE_URL_QA  — host de QA, con --qa
+  APRO_IA_BEARER_TOKEN_QA      — token de QA, con --qa
+  APRO_CREDIT_FORCE_RUTS       — RUTs que siempre se consideran con crédito
 """
 from __future__ import annotations
 
@@ -45,7 +48,7 @@ for p in (_SERVICE, _SHARED):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from apro.credit_client import esta_configurado  # noqa: E402
+from apro.credit_client import ENV_PROD, ENV_QA, esta_configurado  # noqa: E402
 from database.engine import get_session  # noqa: E402
 from database.models.company import Company  # noqa: E402
 from services.credit_sync_service import consultar_en_paralelo  # noqa: E402
@@ -58,11 +61,23 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="no escribe nada")
     ap.add_argument("--rut", help="sincroniza solo esta empresa")
+    ap.add_argument(
+        "--qa",
+        action="store_true",
+        help="consulta el ambiente QA (APRO_IA_CLIENTS_BASE_URL_QA); solo con --dry-run",
+    )
     args = ap.parse_args()
 
-    if not esta_configurado():
+    env = ENV_QA if args.qa else ENV_PROD
+    if args.qa and not args.dry_run:
+        # QA no conoce los créditos reales: aplicar lo que diga apagaría el
+        # crédito de clientes de verdad.
+        print("error: --qa solo se permite junto con --dry-run", file=sys.stderr)
+        return 1
+    if not esta_configurado(env):
         print(
-            "error: falta APRO_CREDIT_BASE_URL o APRO_CREDIT_BEARER_TOKEN",
+            "error: falta APRO_IA_CLIENTS_BASE_URL"
+            f"{'_QA' if args.qa else ''} o el token Bearer de APRO",
             file=sys.stderr,
         )
         return 1
@@ -77,9 +92,10 @@ def main() -> int:
         print(f"Empresas con RUT: {len(empresas)}")
 
         # Las consultas van en paralelo: casi mil empresas, un request cada una.
-        print("Consultando créditos en APRO…")
+        print(f"Consultando créditos en APRO ({env})…")
         destinos = consultar_en_paralelo(
-            sorted({(c.billing_rut or "").strip() for c in empresas if c.billing_rut})
+            sorted({(c.billing_rut or "").strip() for c in empresas if c.billing_rut}),
+            env=env,
         )
 
         if args.dry_run:

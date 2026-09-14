@@ -130,9 +130,12 @@ def test_sync_no_lanza_si_shopify_falla(monkeypatch):
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def apro_configurado(monkeypatch):
-    monkeypatch.setenv("APRO_CREDIT_BASE_URL", "https://cliente-qa.apro.cl")
+    """Créditos reusa la configuración de la API de clientes de APRO."""
+    monkeypatch.setenv("APRO_IA_CLIENTS_BASE_URL", "https://clientes.apro.cl")
+    monkeypatch.setenv("APRO_IA_CLIENTS_BASE_URL_QA", "https://clientes-qa.apro.cl")
     monkeypatch.setenv("APRO_CREDIT_PATH_TEMPLATE", "/credits/client/{rut}")
-    monkeypatch.setenv("APRO_CREDIT_BEARER_TOKEN", "token")
+    monkeypatch.setenv("APRO_IA_BEARER_TOKEN", "token")
+    monkeypatch.setenv("APRO_IA_BEARER_TOKEN_QA", "token-qa")
     monkeypatch.delenv("APRO_CREDIT_FORCE_RUTS", raising=False)
 
 
@@ -179,7 +182,7 @@ def test_normalizar_rut(entrada, esperado):
 
 def test_sin_configuracion_es_indeterminado(monkeypatch):
     """Sin URL no se puede saber: nadie debe cambiar el crédito de nadie."""
-    monkeypatch.delenv("APRO_CREDIT_BASE_URL", raising=False)
+    monkeypatch.delenv("APRO_IA_CLIENTS_BASE_URL", raising=False)
     monkeypatch.delenv("APRO_CREDIT_FORCE_RUTS", raising=False)
     assert credit_client.esta_configurado() is False
     assert credit_client.consultar_credito("76486379-8") is None
@@ -196,7 +199,7 @@ def test_credito_encontrado_devuelve_folio(apro_configurado, monkeypatch):
         "creado_en": "2025-09-03T19:40:50.746Z",
     }
     # El RUT viaja normalizado dentro de la ruta, no como query string.
-    assert hechos[0].full_url == "https://cliente-qa.apro.cl/credits/client/764863798"
+    assert hechos[0].full_url == "https://clientes.apro.cl/credits/client/764863798"
     assert hechos[0].headers["Authorization"] == "Bearer token"
 
 
@@ -208,16 +211,22 @@ def test_sin_path_template_usa_el_default(apro_configurado, monkeypatch):
 
     credit_client.consultar_credito("76486379-8")
 
-    assert hechos[0].full_url == "https://cliente-qa.apro.cl/credits/client/764863798"
+    assert hechos[0].full_url == "https://clientes.apro.cl/credits/client/764863798"
 
 
 def test_404_es_sin_credito_no_error(apro_configurado, monkeypatch):
     """La respuesta documentada para "no tiene crédito" es un 404."""
 
+    cuerpo = json.dumps(
+        {
+            "success": False,
+            "message": "No se encontró crédito para el cliente con RUT: 201628114",
+            "credit": None,
+        }
+    ).encode()
+
     def _fake_urlopen(req, timeout=0):
-        raise urllib.error.HTTPError(
-            req.full_url, 404, "Not Found", {}, BytesIO(b'{"success": false}')
-        )
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, BytesIO(cuerpo))
 
     monkeypatch.setattr(credit_client.urllib.request, "urlopen", _fake_urlopen)
     assert credit_client.consultar_credito("20162811-4") == {
@@ -225,6 +234,34 @@ def test_404_es_sin_credito_no_error(apro_configurado, monkeypatch):
         "folio": None,
         "creado_en": None,
     }
+
+
+def test_404_de_ruta_inexistente_es_indeterminado(apro_configurado, monkeypatch):
+    """`Cannot GET /credits/...` es un host sin el módulo desplegado, no un
+    cliente sin crédito: tratarlo como "sin crédito" apagaría el crédito de
+    todas las empresas de una sola pasada."""
+    cuerpo = json.dumps(
+        {
+            "message": "Cannot GET /credits/client/764863798",
+            "error": "Not Found",
+            "statusCode": 404,
+        }
+    ).encode()
+
+    def _fake_urlopen(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, BytesIO(cuerpo))
+
+    monkeypatch.setattr(credit_client.urllib.request, "urlopen", _fake_urlopen)
+    assert credit_client.consultar_credito("76486379-8") is None
+
+
+def test_ambiente_qa_usa_su_host_y_su_token(apro_configurado, monkeypatch):
+    hechos = _responder(monkeypatch, _CREDITO_OK)
+
+    credit_client.consultar_credito("76486379-8", env=credit_client.ENV_QA)
+
+    assert hechos[0].full_url == "https://clientes-qa.apro.cl/credits/client/764863798"
+    assert hechos[0].headers["Authorization"] == "Bearer token-qa"
 
 
 def test_error_del_dms_es_indeterminado(apro_configurado, monkeypatch):
@@ -296,7 +333,9 @@ def metafields_escritos(monkeypatch) -> list:
 
 
 def _dms_responde(monkeypatch, valor):
-    monkeypatch.setattr(credit_sync_service, "consultar_credito", lambda rut: valor)
+    monkeypatch.setattr(
+        credit_sync_service, "consultar_credito", lambda rut, env=None: valor
+    )
 
 
 def test_sync_enciende_el_credito(monkeypatch, metafields_escritos):
@@ -344,7 +383,7 @@ def test_sync_indeterminado_deja_la_empresa_como_esta(monkeypatch, metafields_es
 
 
 def test_sync_sin_rut_no_consulta(monkeypatch, metafields_escritos):
-    def _explota(rut):
+    def _explota(rut, env=None):
         raise AssertionError("no debería consultar sin RUT")
 
     monkeypatch.setattr(credit_sync_service, "consultar_credito", _explota)

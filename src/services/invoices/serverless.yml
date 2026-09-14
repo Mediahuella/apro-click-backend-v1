@@ -30,7 +30,8 @@ provider:
     # GET público de storefront (consulta de facturas por OC).
     INVOICES_PUBLIC_API_KEY: ${env:INVOICES_PUBLIC_API_KEY, ''}
     # DMS externo APRO (dms.apro.cl) — consulta de facturas/recepciones por OC.
-    DMS_INVOICES_BASE_URL: ${env:DMS_INVOICES_BASE_URL, 'https://dms.apro.cl'}
+    # Misma variable que usa `quotes`: hay un solo DMS.
+    APRO_IA_BASE_URL: ${env:APRO_IA_BASE_URL, 'https://dms.apro.cl'}
     # Mismo token Bearer que usan los servicios quotes/company-registration (distinto host, mismo DMS).
     APRO_IA_BEARER_TOKEN: ${env:APRO_IA_BEARER_TOKEN, ''}
 

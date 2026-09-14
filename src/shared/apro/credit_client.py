@@ -19,12 +19,17 @@ tiene, y asumir "con crédito" se lo daría a quien no.
 El endpoint solo informa **existencia** de crédito (folio y fecha), no montos:
 no hay cupo autorizado ni disponible en este contrato.
 
-Variables de entorno:
+Reusa la configuración de la **API de clientes** de APRO, que es el mismo
+servicio (otra ruta del mismo host) y el mismo token:
 
-    APRO_CREDIT_BASE_URL       — host del servicio (QA: https://cliente-qa.apro.cl)
+    APRO_IA_CLIENTS_BASE_URL     — host productivo
+    APRO_IA_CLIENTS_BASE_URL_QA  — host de QA (``env="qa"``)
+    APRO_IA_BEARER_TOKEN         — token productivo
+    APRO_IA_BEARER_TOKEN_QA      — token de QA
+
+Propias de créditos, ambas opcionales:
+
     APRO_CREDIT_PATH_TEMPLATE  — default ``/credits/client/{rut}``
-    APRO_CREDIT_BEARER_TOKEN   — token propio de este servicio (no es el
-                                 ``APRO_IA_BEARER_TOKEN`` del DMS de documentos)
     APRO_CREDIT_FORCE_RUTS     — RUTs que siempre se consideran con crédito,
                                  separados por coma (empresas de prueba)
 """
@@ -60,11 +65,24 @@ def normalizar_rut(valor: str) -> str:
     )
 
 
-def esta_configurado() -> bool:
-    return bool(
-        (os.environ.get("APRO_CREDIT_BASE_URL") or "").strip()
-        and (os.environ.get("APRO_CREDIT_BEARER_TOKEN") or "").strip()
+ENV_PROD = "prod"
+ENV_QA = "qa"
+
+
+def _base_url(env: str) -> str:
+    clave = (
+        "APRO_IA_CLIENTS_BASE_URL_QA" if env == ENV_QA else "APRO_IA_CLIENTS_BASE_URL"
     )
+    return (os.environ.get(clave) or "").strip().rstrip("/")
+
+
+def _token(env: str) -> str:
+    clave = "APRO_IA_BEARER_TOKEN_QA" if env == ENV_QA else "APRO_IA_BEARER_TOKEN"
+    return (os.environ.get(clave) or "").strip()
+
+
+def esta_configurado(env: str = ENV_PROD) -> bool:
+    return bool(_base_url(env) and _token(env))
 
 
 def _ruts_forzados() -> set[str]:
@@ -72,15 +90,48 @@ def _ruts_forzados() -> set[str]:
     return {normalizar_rut(r) for r in crudo.split(",") if r.strip()}
 
 
-def _url(rut: str) -> str:
-    base = (os.environ.get("APRO_CREDIT_BASE_URL") or "").strip().rstrip("/")
+def _url(rut: str, env: str) -> str:
+    base = _base_url(env)
     plantilla = (os.environ.get("APRO_CREDIT_PATH_TEMPLATE") or _DEFAULT_PATH).strip()
     if not plantilla.startswith("/"):
         plantilla = f"/{plantilla}"
     return f"{base}{plantilla.format(rut=urllib.parse.quote(rut, safe=''))}"
 
 
-def consultar_credito(rut: str, *, timeout: int = 8) -> dict[str, Any] | None:
+def _sin_credito_o_indeterminado(
+    error: urllib.error.HTTPError, rut: str
+) -> dict[str, Any] | None:
+    """Distingue el 404 del DMS ("no tiene crédito") del 404 de ruta inexistente.
+
+    Los dos llegan como HTTP 404 y significan cosas opuestas:
+
+        {"success": false, "message": "No se encontró crédito ...",
+         "credit": null}                          → el cliente no tiene crédito
+        {"message": "Cannot GET /credits/client/...", "error": "Not Found",
+         "statusCode": 404}                       → la ruta no existe en ese host
+
+    Sin esta distinción, apuntar la variable a un host donde el módulo de
+    créditos no está desplegado apagaría el crédito de **todas** las empresas
+    de una sola pasada. Solo el primer cuerpo cuenta como respuesta del DMS;
+    cualquier otro 404 es indeterminado y no cambia nada.
+    """
+    try:
+        cuerpo = json.loads(error.read() or b"{}")
+    except Exception:  # noqa: BLE001 — un 404 sin JSON no es respuesta del DMS
+        cuerpo = None
+    if isinstance(cuerpo, dict) and ("credit" in cuerpo or "success" in cuerpo):
+        return {"tiene_credito": False, "folio": None, "creado_en": None}
+    logger.warning(
+        "404 que no viene del servicio de créditos (¿ruta o host equivocado?): "
+        "se trata como indeterminado",
+        extra={"rut": rut, "cuerpo": str(cuerpo)[:200]},
+    )
+    return None
+
+
+def consultar_credito(
+    rut: str, *, env: str = ENV_PROD, timeout: int = 8
+) -> dict[str, Any] | None:
     """``{"tiene_credito": bool, "folio": str|None, "creado_en": str|None}``.
 
     Devuelve ``None`` cuando **no se pudo determinar** (sin configuración, red
@@ -98,13 +149,13 @@ def consultar_credito(rut: str, *, timeout: int = 8) -> dict[str, Any] | None:
         )
         return {"tiene_credito": True, "folio": None, "creado_en": None, "forzado": True}
 
-    if not esta_configurado():
+    if not esta_configurado(env):
         return None
 
     req = urllib.request.Request(
-        _url(rut_normalizado),
+        _url(rut_normalizado, env),
         headers={
-            "Authorization": f"Bearer {os.environ['APRO_CREDIT_BEARER_TOKEN'].strip()}",
+            "Authorization": f"Bearer {_token(env)}",
             "Accept": "application/json",
         },
         method="GET",
@@ -114,8 +165,7 @@ def consultar_credito(rut: str, *, timeout: int = 8) -> dict[str, Any] | None:
             payload = json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            # Respuesta esperada: el cliente no tiene crédito en el DMS.
-            return {"tiene_credito": False, "folio": None, "creado_en": None}
+            return _sin_credito_o_indeterminado(e, rut_normalizado)
         logger.warning(
             "Consulta de crédito a APRO devolvió error HTTP",
             extra={"rut": rut_normalizado, "status": e.code},
