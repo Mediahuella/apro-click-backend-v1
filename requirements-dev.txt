@@ -1,5 +1,5 @@
 # Development / migration tools (not deployed to Lambda)
-sqlalchemy>=2.0,<3.0
+sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9
 alembic>=1.13
 # Pre-procesamiento del Excel del cotizador (scripts/build_shipping_data.py)

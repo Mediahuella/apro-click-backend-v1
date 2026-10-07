@@ -1,5 +1,5 @@
 # Dependencias propias del servicio (Powertools va en layer; ver serverless.pythonRequirements.yml)
-sqlalchemy>=2.0,<3.0
+sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9
 # Generación del PDF de la cotización (handlers → services/quote_pdf_service.py).
 reportlab>=4.0,<5.0

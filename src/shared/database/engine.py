@@ -22,6 +22,10 @@ def get_engine() -> Engine:
                 "DATABASE_URL is not set or empty. "
                 "Ensure the variable is configured in the Lambda environment."
             )
+        # SQLAlchemy 2.1 cambió el driver por defecto de `postgresql://` a
+        # psycopg (v3), que no se empaqueta; los servicios instalan psycopg2.
+        if url.startswith("postgresql://"):
+            url = "postgresql+psycopg2://" + url[len("postgresql://"):]
         _engine = _create_engine(
             url,
             pool_size=1,
