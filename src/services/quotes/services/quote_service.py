@@ -42,6 +42,7 @@ for path in possible_shared_paths:
         break
 
 from database.engine import get_session  # noqa: E402
+from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
 from database.models.quote_request import (  # noqa: E402
     QuoteRequest,
@@ -56,6 +57,7 @@ from notifications.sqs_publisher import (  # noqa: E402
     encolar_cotizacion_apro_ia_estado,
     encolar_cotizacion_lista,
     encolar_nueva_cotizacion,
+    encolar_pago_credito_cliente,
     encolar_transferencia_estado,
 )
 from services import apro_ia_client  # noqa: E402
@@ -167,6 +169,80 @@ def _attach_seller(session: Session, quotes: list[dict[str, Any]]) -> None:
         uid = referred_by_company.get(key) or sales_by_company.get(key)
         if uid:
             q["assigned_sales_user"] = users.get(uid)
+
+
+def _gid_tail(value: str | None) -> str:
+    """``gid://shopify/Customer/123`` y ``123`` comparan igual."""
+    return str(value or "").strip().rsplit("/", 1)[-1]
+
+
+def _attach_contact(session: Session, quotes: list[dict[str, Any]]) -> None:
+    """Añade ``company_rut`` y ``contact`` ({name, email, phone}) a cada cotización.
+
+    El contacto es el ``Client`` de la empresa que pidió la cotización (por
+    email o por customer de Shopify); si no está registrado como contacto
+    —cotización creada desde APRO IA, email cambiado— cae al contacto
+    principal o, si la empresa no tiene uno marcado, el primer contacto
+    con teléfono. El teléfono solo existe en ``Client``: la cotización guarda
+    nombre y email del solicitante, no su teléfono.
+    """
+    for q in quotes:
+        q["company_rut"] = None
+        q["contact"] = None
+    company_ids = {
+        uuid.UUID(str(q["company_id"])) for q in quotes if q.get("company_id")
+    }
+    if not company_ids:
+        return
+
+    ruts = dict(
+        session.execute(
+            select(Company.id, Company.billing_rut).where(Company.id.in_(company_ids))
+        ).all()
+    )
+    clients_by_company: dict[str, list[Client]] = {}
+    for c in session.scalars(
+        select(Client)
+        .where(Client.company_id.in_(company_ids))
+        .order_by(Client.is_main_contact.desc(), Client.created_at)
+    ).all():
+        clients_by_company.setdefault(str(c.company_id), []).append(c)
+
+    for q in quotes:
+        cid = str(q.get("company_id") or "")
+        if not cid:
+            continue
+        q["company_rut"] = ruts.get(uuid.UUID(cid))
+        clients = clients_by_company.get(cid, [])
+        email = (q.get("requested_by_email") or "").strip().lower()
+        customer = _gid_tail(q.get("requested_by_customer_id"))
+        match = next(
+            (c for c in clients if email and (c.email or "").strip().lower() == email),
+            None,
+        ) or next(
+            (
+                c
+                for c in clients
+                if customer and _gid_tail(c.shopify_customer_id) == customer
+            ),
+            None,
+        )
+        # Las cotizaciones creadas desde APRO IA no traen solicitante y hay
+        # empresas sin contacto principal marcado: en ese caso sirve cualquier
+        # contacto, mejor si tiene teléfono.
+        if match is None:
+            match = (
+                next((c for c in clients if c.is_main_contact), None)
+                or next((c for c in clients if (c.phone or "").strip()), None)
+                or next(iter(clients), None)
+            )
+        if match is not None:
+            q["contact"] = {
+                "name": match.name,
+                "email": match.email,
+                "phone": match.phone,
+                "is_main_contact": bool(match.is_main_contact),
+            }
 
 
 def _vendedor_name(session: Session, company: Company | None) -> str:
@@ -438,6 +514,7 @@ def list_quotes(
         ).all()
         items = [_enrich(r.to_dict()) for r in rows]
         _attach_seller(session, items)
+        _attach_contact(session, items)
         return {"total": total, "items": items}
 
 
@@ -462,6 +539,7 @@ def get_quote(
             return None
         data = _enrich(quote.to_dict())
         _attach_seller(session, [data])
+        _attach_contact(session, [data])
         return data
 
 
@@ -1306,6 +1384,7 @@ def handle_apro_ia_transfer_webhook(
         return {"received": True, "matched": False, "applied": False, "status": raw_status}
 
     notify: dict[str, Any] | None = None
+    notify_cliente: dict[str, Any] | None = None
     with get_session() as session:
         target = _find_transfer_target(session, order_ref, rut)
         if target is None:
@@ -1416,6 +1495,11 @@ def handle_apro_ia_transfer_webhook(
                 "status": raw_status,
                 "payment_method": payment_method,
             }
+            if payment_method == PAYMENT_METHOD_CREDIT:
+                notify_cliente = _aviso_pago_cliente(
+                    session, company, quote, shopify_order, order_ref,
+                    aprobado=estado == TRANSFER_STATUS_APROBADA,
+                )
         result = {
             "received": True,
             "matched": True,
@@ -1429,7 +1513,70 @@ def handle_apro_ia_transfer_webhook(
 
     if notify:
         encolar_transferencia_estado(**notify)
+    if notify_cliente:
+        encolar_pago_credito_cliente(**notify_cliente)
     return result
+
+
+def _aviso_pago_cliente(
+    session: Session,
+    company: Company | None,
+    quote: QuoteRequest | None,
+    shopify_order: ShopifyOrder | None,
+    order_ref: str,
+    *,
+    aprobado: bool,
+) -> dict[str, Any] | None:
+    """Arma el aviso al cliente del resultado de su pago con crédito.
+
+    Destinatario, en orden: quien hizo el pedido en Shopify, quien pidió la
+    cotización y, si no hay ninguno, el contacto principal de la empresa.
+    Devuelve ``None`` si no hay a quién escribirle.
+    """
+    contactos: list[Client] = []
+    if company is not None:
+        contactos = list(
+            session.scalars(
+                select(Client)
+                .where(Client.company_id == company.id, Client.email.is_not(None))
+                .order_by(Client.is_main_contact.desc())
+            ).all()
+        )
+    email = (
+        (shopify_order.email if shopify_order else None)
+        or (quote.requested_by_email if quote else None)
+        or (contactos[0].email if contactos else None)
+        or ""
+    ).strip()
+    if not email:
+        logger.warning(
+            "Pago con crédito: sin email del cliente para avisarle",
+            extra={"order": order_ref, "company_id": str(company.id) if company else None},
+        )
+        return None
+    nombre = next(
+        (c.name for c in contactos if (c.email or "").strip().lower() == email.lower()),
+        None,
+    ) or (quote.requested_by_name if quote else None)
+
+    total = None
+    if shopify_order is not None and shopify_order.total_price is not None:
+        total = f"${shopify_order.total_price:,.0f} {shopify_order.currency or 'CLP'}".replace(",", ".")
+    order_name = (
+        (shopify_order.order_name if shopify_order else None)
+        or (quote.folio if quote else None)
+        or order_ref
+    )
+    if not order_name.startswith("#") and order_name.isdigit():
+        order_name = f"#{order_name}"
+    return {
+        "contact_email": email,
+        "contact_name": nombre,
+        "company_name": (company.name if company else None) or "",
+        "order_name": order_name,
+        "aprobado": aprobado,
+        "total": total,
+    }
 
 
 def _etiqueta_medio(payment_method: str) -> str:
@@ -1467,6 +1614,23 @@ def _load_for_negotiation(session: Session, quote_id: str) -> QuoteRequest:
     return quote
 
 
+#: Tope del comentario por línea: es una nota, no un documento.
+LINE_COMMENT_MAX_LEN = 1000
+
+
+def _line_comment(value: Any) -> str | None:
+    text_value = str(value or "").strip()
+    return text_value[:LINE_COMMENT_MAX_LEN] or None
+
+
+def _only_line_comments(body: dict[str, Any]) -> bool:
+    """El PATCH trae solo comentarios de líneas existentes (``{id, comment}``)."""
+    lines = body.get("lines")
+    if set(body) != {"lines"} or not isinstance(lines, list) or not lines:
+        return False
+    return all(isinstance(rl, dict) and set(rl) <= {"id", "comment"} for rl in lines)
+
+
 def update_quote_lines(quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
     """SALES fija precios netos / descuentos, cantidades y líneas por línea y condiciones."""
     with get_session() as session:
@@ -1486,6 +1650,8 @@ def update_quote_lines(quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
             if "applied_discount" in rl:
                 ad = rl.get("applied_discount")
                 ln.applied_discount = ad if isinstance(ad, dict) else None
+            if "comment" in rl:
+                ln.comment = _line_comment(rl.get("comment"))
             if "quantity" in rl:
                 try:
                     qty = int(rl["quantity"])
@@ -1533,6 +1699,7 @@ def update_quote_lines(quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
                     quantity=qty,
                     on_demand=False,
                     negotiated_unit_price=_to_decimal(nl.get("negotiated_unit_price")),
+                    comment=_line_comment(nl.get("comment")),
                     currency=default_currency,
                 )
                 session.add(new_ln)
@@ -1568,6 +1735,12 @@ def update_quote_lines(quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
                     }
                 except (InvalidOperation, ValueError):
                     pass
+        # Si solo cambiaron comentarios de línea no se toca Shopify, el PDF ni
+        # APRO IA: el comentario es interno del panel y no viaja a ninguno.
+        if _only_line_comments(body):
+            result = quote.to_dict()
+            session.commit()
+            return result
         # Si ya tiene Draft Order, actualizarlo con los nuevos precios/envío.
         if quote.draft_order_gid and quote.status in ("COTIZADA", "INVOICE_SENT"):
             try:

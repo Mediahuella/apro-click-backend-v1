@@ -52,7 +52,7 @@ def _capturar(fn, /, **kwargs) -> tuple[list[str], str, str]:
 
 
 def correos() -> list[dict]:
-    """Las ocho notificaciones, en el orden de los dos flujos de negocio."""
+    """Las nueve notificaciones, en el orden de los dos flujos de negocio."""
     return [
         {
             "grupo": "Alta de empresa",
@@ -275,6 +275,38 @@ def correos() -> list[dict]:
                 ),
             },
         },
+        {
+            "grupo": "Cotizaciones y pagos",
+            "titulo": "Resultado del pago con crédito (al cliente)",
+            "clave": "pago_credito_cliente",
+            "publico": "cliente",
+            "disparador": "APRO IA aprueba o rechaza el pago con Crédito Apro de un pedido.",
+            "destinatarios": "Quien hizo el pedido en Shopify; si no hay email, quien pidió la cotización o el contacto principal de la empresa.",
+            "boton": "Ver mis pedidos",
+            "cuerpo": "Pedido, total, medio de pago y si quedó pagado o pendiente de pago.",
+            "nota": "Solo para crédito. Sale una vez por pedido y resultado: un reenvío del mismo estado o un pedido que ya estaba pagado no vuelven a avisar.",
+            "captura": _capturar(
+                ses.notify_pago_credito_cliente,
+                contact_email=EMAIL,
+                contact_name=CONTACTO,
+                company_name=EMPRESA,
+                order_name="#1042",
+                aprobado=True,
+                total="$1.254.300 CLP",
+            ),
+            "variante": {
+                "etiqueta": "Cuando el crédito no se aprueba",
+                "captura": _capturar(
+                    ses.notify_pago_credito_cliente,
+                    contact_email=EMAIL,
+                    contact_name=CONTACTO,
+                    company_name=EMPRESA,
+                    order_name="#1042",
+                    aprobado=False,
+                    total="$1.254.300 CLP",
+                ),
+            },
+        },
     ]
 
 
@@ -399,7 +431,7 @@ def construir() -> str:
     <div class="eyebrow">Apro Click · Referencia interna</div>
     <h1>Correos que envía la plataforma</h1>
     <p class="lede">
-      Las ocho notificaciones automáticas de Apro Click: qué las dispara, a quién llegan
+      Las nueve notificaciones automáticas de Apro Click: qué las dispara, a quién llegan
       y cómo se ven. Ningún correo se envía fuera de esta lista.
     </p>
     <div class="meta-row">
@@ -440,7 +472,7 @@ def construir() -> str:
   </section>
 
   <section>
-    <h2>Las ocho notificaciones</h2>
+    <h2>Las nueve notificaciones</h2>
     <div class="scroll">
       <table>
         <thead>

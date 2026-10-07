@@ -12,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 LOGO_URL = "https://cdn.shopify.com/s/files/1/0940/5399/0584/files/Logo_AProClick-Black_48.png?v=1778514883"
+#: Logo de APRO (verde sobre transparente) para el pie «Un portal de:».
+LOGO_APRO_URL = "https://cdn.shopify.com/s/files/1/0940/5399/0584/files/Logo_Apro_email.png?v=1790600979"
 ADMIN_PANEL_URL = "https://admin.aproclick.cl"
 BRAND_PRIMARY = "#0B5FFF"
+#: Morado de Apro Click (el «Click» del logo): color de los botones de todos los correos.
+BRAND_BUTTON = "#AC71C7"
 BRAND_DARK = "#0A1A2F"
 BG_PAGE = "#F4F6FB"
 BG_CARD = "#FFFFFF"
@@ -28,12 +32,33 @@ def _ses():
     return boto3.client("ses", region_name=region)
 
 
-def _layout(preheader: str, content_html: str, cta: tuple[str, str] | None = None) -> str:
+def _layout(
+    preheader: str,
+    content_html: str,
+    cta: tuple[str, str] | None = None,
+    portal_apro: bool = False,
+) -> str:
     """Envuelve el contenido en un layout HTML compatible con clientes de email.
 
     `preheader` es el texto que se muestra en la vista previa del inbox.
     `cta` es una tupla opcional (texto_boton, url).
+    `portal_apro` agrega al pie «Un portal de:» con el logo de APRO.
     """
+    portal_html = ""
+    if portal_apro:
+        portal_html = f"""
+          <tr>
+            <td align="center" style="padding:0 32px 26px 32px;background:{BG_CARD};">
+              <p style="margin:0 0 6px 0;font-size:12px;color:{TEXT_MUTED};">
+                Un portal de:
+              </p>
+              <img src="{LOGO_APRO_URL}" alt="APRO" width="84" height="18"
+                   style="display:block;border:0;outline:none;text-decoration:none;
+                          width:84px;height:18px;margin:0 auto;" />
+            </td>
+          </tr>
+        """
+
     cta_html = ""
     if cta:
         cta_text, cta_url = cta
@@ -41,7 +66,7 @@ def _layout(preheader: str, content_html: str, cta: tuple[str, str] | None = Non
         <tr>
           <td align="center" style="padding:24px 0 8px 0;">
             <a href="{cta_url}"
-               style="display:inline-block;background:{BRAND_PRIMARY};color:#FFFFFF;
+               style="display:inline-block;background:{BRAND_BUTTON};color:#FFFFFF;
                       text-decoration:none;font-weight:600;font-size:15px;
                       padding:14px 28px;border-radius:8px;
                       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -94,6 +119,7 @@ def _layout(preheader: str, content_html: str, cta: tuple[str, str] | None = Non
               © Apro Click — Distribución B2B
             </td>
           </tr>
+          {portal_html}
         </table>
       </td>
     </tr>
@@ -492,3 +518,85 @@ def notify_transferencia_estado(
         cta=("Revisar en el panel", f"{ADMIN_PANEL_URL}/quotes/{quote_id}"),
     )
     _enviar(admin_emails, subject, html)
+
+
+#: Página de pedidos del cliente en la tienda (Shopify redirige a la cuenta).
+STORE_ACCOUNT_URL = "https://www.aproclick.cl/account"
+
+
+def notify_pago_credito_cliente(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    order_name: str,
+    aprobado: bool,
+    total: str | None = None,
+) -> None:
+    """Avisa al cliente si APRO aprobó o rechazó el pago con Crédito Apro de su pedido.
+
+    No incluye el estado interno del DMS (``Descartada``, ``En papelera``…):
+    son estados de back-office que no le dicen nada al cliente.
+    """
+    if not contact_email:
+        return
+    if aprobado:
+        subject = f"Pago con Crédito Apro aprobado — pedido {order_name}"
+        preheader = f"El pago de tu pedido {order_name} fue aprobado y quedó pagado."
+        titulo = "Tu pago con crédito fue aprobado"
+        accent = "#1a7f37"
+        estado = "Pagado"
+        detalle = f"""
+          <p style="margin:0 0 14px 0;">
+            Aprobamos el pago con <b>Crédito Apro</b> del pedido
+            <b style="color:{BRAND_DARK};">{order_name}</b> de <b>{company_name}</b>.
+            El pedido ya quedó <b>pagado</b> y lo estamos preparando para el despacho;
+            te avisaremos cuando salga.
+          </p>
+        """
+    else:
+        subject = f"No pudimos aprobar el pago con crédito — pedido {order_name}"
+        preheader = f"El pago con Crédito Apro de tu pedido {order_name} no fue aprobado."
+        titulo = "Tu pago con crédito no fue aprobado"
+        accent = "#b42318"
+        estado = "Pendiente de pago"
+        detalle = f"""
+          <p style="margin:0 0 14px 0;">
+            No pudimos aprobar el pago con <b>Crédito Apro</b> del pedido
+            <b style="color:{BRAND_DARK};">{order_name}</b> de <b>{company_name}</b>.
+            El pedido <b>no se anuló</b>: sigue registrado y queda
+            <b>pendiente de pago</b>.
+          </p>
+          <p style="margin:0 0 14px 0;">
+            Para regularizarlo, escríbele a tu ejecutivo comercial de Apro.
+          </p>
+        """
+    total_block = ""
+    if total:
+        total_block = f"""
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Total</td>
+            <td style="padding:6px 4px;font-weight:600;">{total}</td></tr>
+        """
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:20px;color:{BRAND_DARK};">
+        {titulo}
+      </h1>
+      <p style="margin:0 0 14px 0;">{f"Hola {contact_name}," if contact_name else "Hola,"}</p>
+      {detalle}
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px;">
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Pedido</td>
+            <td style="padding:6px 4px;font-weight:600;">{order_name}</td></tr>
+        {total_block}
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Medio de pago</td>
+            <td style="padding:6px 4px;font-weight:600;">Crédito Apro</td></tr>
+        <tr><td style="padding:6px 4px;color:{TEXT_MUTED};font-size:13px;">Estado</td>
+            <td style="padding:6px 4px;font-weight:600;color:{accent};">{estado}</td></tr>
+      </table>
+    """
+    html = _layout(
+        preheader=preheader,
+        content_html=content,
+        cta=("Ver mis pedidos", STORE_ACCOUNT_URL),
+        portal_apro=True,
+    )
+    _enviar([contact_email], subject, html)

@@ -37,6 +37,7 @@ if str(SHARED_ROOT) not in sys.path:
 
 from database.base import Base  # noqa: E402
 import database.models  # noqa: E402,F401  registra todos los modelos en Base
+from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
 from database.models.quote_request import QuoteRequest, QuoteRequestLine  # noqa: E402
 from database.models.shopify_order import ShopifyOrder  # noqa: E402
@@ -80,6 +81,18 @@ def sin_emails(monkeypatch):
     monkeypatch.setattr(
         quote_service,
         "encolar_transferencia_estado",
+        lambda **kwargs: enviados.append(kwargs),
+    )
+    return enviados
+
+
+@pytest.fixture(autouse=True)
+def avisos_cliente(monkeypatch):
+    """Captura los avisos al cliente (pago con crédito) en vez de encolarlos."""
+    enviados: list[dict] = []
+    monkeypatch.setattr(
+        quote_service,
+        "encolar_pago_credito_cliente",
         lambda **kwargs: enviados.append(kwargs),
     )
     return enviados
@@ -741,3 +754,119 @@ def test_endpoint_creditos_qa_descarta_rut_fuera_de_la_allowlist(
     assert resp["statusCode"] == 200
     assert json.loads(resp["body"])["data"]["ignored"] is True
     assert shopify.llamadas == []
+
+
+# ---------------------------------------------------------------------------
+# Aviso al cliente del resultado del pago con crédito
+# ---------------------------------------------------------------------------
+def _con_datos_del_pedido(db_session_factory, *, email: str | None = "compras@labor.cl"):
+    with db_session_factory() as session:
+        order = session.scalar(select(ShopifyOrder))
+        order.email = email
+        order.total_price = Decimal("54896")
+        order.currency = "CLP"
+        session.commit()
+
+
+def _agregar_contacto(db_session_factory, *, email: str, name: str, principal: bool):
+    with db_session_factory() as session:
+        company = session.scalar(select(Company))
+        session.add(
+            Client(
+                id=uuid_mod.uuid4(),
+                company_id=company.id,
+                email=email,
+                name=name,
+                is_main_contact=principal,
+            )
+        )
+        session.commit()
+
+
+def test_credito_aprobado_avisa_al_cliente_que_hizo_el_pedido(
+    db_session_factory, shopify, avisos_cliente
+):
+    _crear_quote(db_session_factory, order_gid="gid://shopify/Order/555", order_name="#1128")
+    _con_datos_del_pedido(db_session_factory)
+    _agregar_contacto(db_session_factory, email="Compras@labor.cl", name="Ana", principal=False)
+
+    quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+
+    assert avisos_cliente == [
+        {
+            "contact_email": "compras@labor.cl",
+            "contact_name": "Ana",
+            "company_name": "LABOR SERVICES SPA",
+            "order_name": "#1128",
+            "aprobado": True,
+            "total": "$54.896 CLP",
+        }
+    ]
+
+
+def test_credito_rechazado_avisa_al_cliente(db_session_factory, shopify, avisos_cliente):
+    _crear_quote(db_session_factory, order_gid="gid://shopify/Order/555")
+    _con_datos_del_pedido(db_session_factory)
+
+    quote_service.handle_apro_ia_credit_webhook(_payload("Descartada / En papelera"))
+
+    assert len(avisos_cliente) == 1
+    assert avisos_cliente[0]["aprobado"] is False
+
+
+def test_credito_reenviado_avisa_al_cliente_una_sola_vez(
+    db_session_factory, shopify, avisos_cliente
+):
+    _crear_quote(db_session_factory, order_gid="gid://shopify/Order/555")
+    _con_datos_del_pedido(db_session_factory)
+
+    quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+    quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+
+    assert len(avisos_cliente) == 1
+
+
+def test_credito_de_pedido_ya_pagado_no_avisa_al_cliente(
+    db_session_factory, shopify, avisos_cliente
+):
+    _crear_pedido_sin_cotizacion(db_session_factory, shopify_order_id="555")
+    _con_datos_del_pedido(db_session_factory)
+    shopify.order_ya_pagado = True
+
+    quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+
+    assert avisos_cliente == []
+
+
+def test_transferencia_no_avisa_al_cliente(db_session_factory, shopify, avisos_cliente):
+    _crear_quote(db_session_factory, order_gid="gid://shopify/Order/555")
+    _con_datos_del_pedido(db_session_factory)
+
+    quote_service.handle_apro_ia_transfer_webhook(_payload("Aprobada"))
+
+    assert avisos_cliente == []
+
+
+def test_credito_sin_email_en_el_pedido_avisa_al_contacto_principal(
+    db_session_factory, shopify, avisos_cliente
+):
+    _crear_pedido_sin_cotizacion(db_session_factory, shopify_order_id="555")
+    _con_datos_del_pedido(db_session_factory, email=None)
+    _agregar_contacto(db_session_factory, email="otro@labor.cl", name="Luis", principal=False)
+    _agregar_contacto(db_session_factory, email="jefa@labor.cl", name="Marta", principal=True)
+
+    quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+
+    assert avisos_cliente[0]["contact_email"] == "jefa@labor.cl"
+    assert avisos_cliente[0]["contact_name"] == "Marta"
+
+
+def test_credito_sin_ningun_email_no_avisa_ni_falla(
+    db_session_factory, shopify, avisos_cliente
+):
+    _crear_pedido_sin_cotizacion(db_session_factory, shopify_order_id="555")
+
+    result = quote_service.handle_apro_ia_credit_webhook(_payload("Aprobada"))
+
+    assert result["applied"] is True
+    assert avisos_cliente == []

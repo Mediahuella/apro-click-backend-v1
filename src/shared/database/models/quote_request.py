@@ -221,6 +221,9 @@ class QuoteRequestLine(Base, TimestampMixin, DictMixin):
     negotiated_unit_price: Mapped[Decimal | None] = mapped_column(
         Numeric(18, 4), nullable=True
     )
+    #: Comentario libre de SALES sobre la línea (plazo, marca alternativa,
+    #: observación del cliente…). Solo vive en el panel: no viaja al Draft Order.
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Descuento por línea opcional (``{valueType, value, title}``).
     applied_discount: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     currency: Mapped[str] = mapped_column(

@@ -204,3 +204,25 @@ def encolar_transferencia_estado(
             "payment_method": payment_method,
         },
     )
+
+
+def encolar_pago_credito_cliente(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+    order_name: str,
+    aprobado: bool,
+    total: str | None = None,
+) -> None:
+    """Encola el aviso al cliente de que su pago con Crédito Apro se aprobó o rechazó."""
+    _encolar(
+        "pago_credito_cliente",
+        {
+            "contact_email": contact_email,
+            "contact_name": contact_name,
+            "company_name": company_name,
+            "order_name": order_name,
+            "aprobado": aprobado,
+            "total": total,
+        },
+    )
