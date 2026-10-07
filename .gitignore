@@ -76,3 +76,5 @@ infra/terraform.tfvars
 .serverless/
 
 notas
+# Registro de envíos de campañas de email (contiene emails de clientes)
+campana_*_enviados.csv
