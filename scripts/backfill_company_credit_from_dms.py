@@ -82,6 +82,15 @@ def main() -> int:
         )
         return 1
 
+    # El token se resuelve antes de abrir la sesión: el pool es de una sola
+    # conexión y una get_session() anidada se queda esperando hasta el timeout.
+    shop_domain, access_token = "", ""
+    if not args.dry_run:
+        try:
+            shop_domain, access_token = _resolve_shop_and_token()
+        except LookupError:
+            print("aviso: sin instalación Shopify activa, solo se actualiza la BD")
+
     with get_session() as session:
         q = select(Company).where(
             Company.billing_rut.is_not(None), Company.is_system.is_(False)
@@ -111,12 +120,6 @@ def main() -> int:
                     print(f"  [~] {c.name} ({c.billing_rut}): {actual} → {destino}")
             print(f"\nCambiarían: {cambios} · indeterminadas: {indeterminadas}")
             return 0
-
-        try:
-            shop_domain, access_token = _resolve_shop_and_token()
-        except LookupError:
-            print("aviso: sin instalación Shopify activa, solo se actualiza la BD")
-            shop_domain, access_token = "", ""
 
         cambios = indeterminadas = 0
         for c in empresas:

@@ -691,3 +691,122 @@ def test_endpoint_rechaza_body_invalido(monkeypatch):
     event["body"] = "no-es-json"
     response = quotes_handler.lambda_handler(event, _FakeLambdaContext())
     assert response["statusCode"] == 400
+
+
+# ---------------------------------------------------------------------------
+# Envío como línea «COSTO DE ENVIO» y comentario por línea, desde APRO IA
+# ---------------------------------------------------------------------------
+_ENVIO_SKU = quote_service.apro_ia_client.DEFAULT_SHIPPING_SKU
+
+
+def _producto_envio(price: int, name: str = "COSTO DE ENVIO - Starken") -> dict:
+    return {"sku": _ENVIO_SKU, "name": name, "amount": 1, "price": price, "total": price}
+
+
+def _sin_shopify(*a, **kw):
+    raise AssertionError("el producto de envío no debe buscarse en el catálogo")
+
+
+def test_webhook_actualiza_precio_del_envio_y_el_draft(
+    quote_with_apro_ia, db_session_factory, monkeypatch
+):
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(quote_with_apro_ia))
+        quote.shipping_line = {"title": "Starken", "price": "3990"}
+        session.commit()
+    monkeypatch.setattr(quote_service.draft_order_service, "resolve_variant_by_sku", _sin_shopify)
+    drafts = []
+    monkeypatch.setattr(
+        quote_service.draft_order_service,
+        "update_quote_draft",
+        lambda session, quote: drafts.append(dict(quote.shipping_line)),
+    )
+
+    payload = _apro_ia_payload("quotation.updated", "Pendiente")
+    payload["products"].append(_producto_envio(5000))
+    quote_service.handle_apro_ia_webhook(payload)
+
+    assert drafts == [{"title": "Starken", "price": "5000"}]
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(quote_with_apro_ia))
+        assert quote.shipping_line == {"title": "Starken", "price": "5000"}
+        assert len(quote.lines) == 1  # el envío no se vuelve línea de catálogo
+
+
+def test_webhook_sin_producto_de_envio_no_borra_el_envio(
+    quote_with_apro_ia, db_session_factory, monkeypatch
+):
+    """Cotizaciones anteriores al cambio no tienen el envío en APRO IA."""
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(quote_with_apro_ia))
+        quote.shipping_line = {"title": "Starken", "price": "3990"}
+        session.commit()
+    drafts = []
+    monkeypatch.setattr(
+        quote_service.draft_order_service,
+        "update_quote_draft",
+        lambda session, quote: drafts.append(1),
+    )
+
+    quote_service.handle_apro_ia_webhook(_apro_ia_payload("quotation.updated", "Pendiente"))
+
+    assert drafts == []
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(quote_with_apro_ia))
+        assert quote.shipping_line == {"title": "Starken", "price": "3990"}
+
+
+def test_webhook_guarda_comentario_de_linea_sin_tocar_el_draft(
+    quote_with_apro_ia, db_session_factory, monkeypatch
+):
+    drafts = []
+    monkeypatch.setattr(
+        quote_service.draft_order_service,
+        "update_quote_draft",
+        lambda session, quote: drafts.append(1),
+    )
+
+    payload = _apro_ia_payload("quotation.updated", "Pendiente")
+    payload["products"][0]["comment_product"] = "  Entrega en 10 días  "
+    quote_service.handle_apro_ia_webhook(payload)
+
+    assert drafts == []
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(quote_with_apro_ia))
+        assert quote.lines[0].comment == "Entrega en 10 días"
+
+
+def test_created_toma_envio_y_comentarios_de_apro_ia(
+    existing_company, db_session_factory, monkeypatch
+):
+    monkeypatch.setattr(
+        quote_service,
+        "resolve_store_token",
+        lambda session, shop_domain=None: ("aproclick.myshopify.com", "fake-token"),
+    )
+
+    def _variant(shop_domain, token, sku):
+        assert sku != _ENVIO_SKU, "el producto de envío no debe buscarse en el catálogo"
+        return {"id": f"gid://shopify/ProductVariant/{sku}", "sku": sku, "displayName": sku}
+
+    monkeypatch.setattr(quote_service.draft_order_service, "resolve_variant_by_sku", _variant)
+    monkeypatch.setattr(
+        quote_service.draft_order_service, "create_quote_draft", lambda session, quote: {}
+    )
+    monkeypatch.setattr(
+        quote_service.apro_ia_client,
+        "descargar_pdf",
+        lambda folio: (_ for _ in ()).throw(RuntimeError("sin PDF")),
+    )
+    monkeypatch.setattr(quote_service, "encolar_nueva_cotizacion", lambda **kw: None)
+
+    payload = _apro_ia_payload("quotation.created", "Pendiente", id="nuevo-1", folio="AC-1")
+    payload["products"][0]["comment_product"] = "Color rojo"
+    payload["products"].append(_producto_envio(4500, name="COSTO DE ENVIO"))
+    result = quote_service.handle_apro_ia_webhook(payload)
+
+    with db_session_factory() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(result["quote_id"]))
+        assert [ln.sku for ln in quote.lines] == ["00100006979000"]
+        assert quote.lines[0].comment == "Color rojo"
+        assert quote.shipping_line == {"title": "Envío", "price": "4500"}

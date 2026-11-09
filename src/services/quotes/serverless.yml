@@ -60,6 +60,11 @@ provider:
     # Código SAP por defecto cuando no se puede resolver el de un usuario (User.codigo_sap).
     # APRO IA identifica al vendedor por este código, no por el email.
     APRO_IA_DEFAULT_SELLER_SAP_CODE: ${env:APRO_IA_DEFAULT_SELLER_SAP_CODE, '000'}
+    # SKU del producto «COSTO DE ENVIO» con que el envío viaja a APRO IA.
+    APRO_IA_SHIPPING_SKU: ${env:APRO_IA_SHIPPING_SKU, '00000300000013'}
+    # Manda el comentario de cada línea a APRO IA (products[].comment_product).
+    # Apagado por defecto; la lectura desde el webhook va siempre.
+    APRO_IA_LINE_COMMENTS: ${env:APRO_IA_LINE_COMMENTS, 'false'}
     # Cola SQS del servicio notifications para envío de emails.
     NOTIFICATIONS_QUEUE_URL:
       Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-url
@@ -127,6 +132,9 @@ functions:
           method: post
       - httpApi:
           path: /api/v1/quotes/{quote_id}/pdf
+          method: get
+      - httpApi:
+          path: /api/v1/quotes/{quote_id}/pay
           method: get
       - httpApi:
           path: /api/v1/quotes/{quote_id}/shipping-rates

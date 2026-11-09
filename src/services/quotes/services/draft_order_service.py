@@ -208,6 +208,32 @@ query variantePorSKU($query: String!) {
 }
 """
 
+_DRAFT_ORDER_INVOICE_URL = """
+query linkPagoCotizacion($id: ID!) {
+  draftOrder(id: $id) {
+    id
+    status
+    invoiceUrl
+    order { id name displayFinancialStatus statusPageUrl }
+  }
+}
+"""
+
+_DRAFT_ORDERS_STATE = """
+query estadoDraftsCotizaciones($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on DraftOrder {
+      id
+      status
+      order { id name displayFinancialStatus }
+    }
+  }
+}
+"""
+
+#: Tope de ids por llamada a ``nodes`` (Shopify admite hasta 250).
+_NODES_BATCH = 100
+
 _DRAFT_ORDER_COMPLETE = """
 mutation completarDraft($id: ID!, $paymentPending: Boolean) {
   draftOrderComplete(id: $id, paymentPending: $paymentPending) {
@@ -538,6 +564,39 @@ def send_quote_invoice(session: Session, quote: QuoteRequest) -> dict:
     if errs:
         raise ValueError(f"draftOrderInvoiceSend: {format_user_errors(errs)}")
     return result.get("draftOrder") or {}
+
+
+def fetch_invoice_url(session: Session, quote: QuoteRequest) -> dict:
+    """Lee ``invoiceUrl``/``status``/``order`` del Draft Order sin enviar el correo."""
+    if not quote.draft_order_gid:
+        raise ValueError("La cotización no tiene Draft Order asociado")
+    shop_domain, token = resolve_store_token(session, quote.shop_domain)
+    data = graphql_call(
+        shop_domain, token, _DRAFT_ORDER_INVOICE_URL, {"id": quote.draft_order_gid}
+    )
+    draft = data.get("draftOrder")
+    if not draft:
+        raise ValueError("El Draft Order de la cotización ya no existe en Shopify")
+    return draft
+
+
+def fetch_drafts_state(session: Session, shop_domain: str, draft_gids: list[str]) -> dict[str, dict]:
+    """Estado de varios Draft Orders en lote: ``{draft_gid: {status, order}}``.
+
+    Los drafts borrados en Shopify no aparecen en el resultado.
+    """
+    if not draft_gids:
+        return {}
+    shop, token = resolve_store_token(session, shop_domain)
+    out: dict[str, dict] = {}
+    for i in range(0, len(draft_gids), _NODES_BATCH):
+        data = graphql_call(
+            shop, token, _DRAFT_ORDERS_STATE, {"ids": draft_gids[i : i + _NODES_BATCH]}
+        )
+        for node in data.get("nodes") or []:
+            if node and node.get("id"):
+                out[node["id"]] = node
+    return out
 
 
 def complete_quote(

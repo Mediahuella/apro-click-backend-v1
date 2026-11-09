@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import sys
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ from database.models.company import Company  # noqa: E402
 from database.models.quote_request import QuoteRequest  # noqa: E402
 from database.models.shopify import ShopifyAppInstallation  # noqa: E402
 from database.models.shopify_order import ShopifyOrder  # noqa: E402
+from utils.shopify_graphql import graphql_call  # noqa: E402
 
 _GID_SHOPIFY_COMPANY = re.compile(r"^gid://shopify/Company/(\d+)$")
 
@@ -142,6 +143,107 @@ def _shipping_lines_for_storage(order: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# Atributos que escribe la extensión de checkout `fecha-retiro`
+# (aproclick-connector/extensions/fecha-retiro/src/atributos.ts).
+PICKUP_DATE_ATTRIBUTE = "fecha_retiro"
+PICKUP_LOCATION_ATTRIBUTE = "sucursal_retiro"
+PICKUP_TAG = "retiro"
+
+_TAGS_ADD = """
+mutation tagsAdd($id: ID!, $tags: [String!]!) {
+  tagsAdd(id: $id, tags: $tags) {
+    userErrors { field message }
+  }
+}
+"""
+
+
+def _note_attributes(order: dict[str, Any]) -> dict[str, str]:
+    """``note_attributes`` del webhook REST (lista de ``{name, value}``) como dict."""
+    raw = order.get("note_attributes")
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, str] = {}
+    for attr in raw:
+        if not isinstance(attr, dict):
+            continue
+        name = attr.get("name")
+        value = attr.get("value")
+        if isinstance(name, str) and value is not None:
+            out[name.strip()] = str(value).strip()
+    return out
+
+
+def _pickup_from_order(order: dict[str, Any]) -> tuple[date | None, str | None]:
+    """Fecha y sucursal de retiro elegidas en el checkout.
+
+    La extensión borra los atributos cuando el cliente cambia a despacho, así
+    que su presencia basta para saber que es un retiro. Una fecha mal formada
+    se descarta (el pedido sigue sincronizándose).
+    """
+    attrs = _note_attributes(order)
+    try:
+        pickup_date = date.fromisoformat(attrs.get(PICKUP_DATE_ATTRIBUTE, ""))
+    except ValueError:
+        return None, None
+    location = (attrs.get(PICKUP_LOCATION_ATTRIBUTE) or "").strip()[:255] or None
+    return pickup_date, location
+
+
+def _order_tags(order: dict[str, Any]) -> set[str]:
+    raw = order.get("tags")
+    if isinstance(raw, str):
+        items = raw.split(",")
+    elif isinstance(raw, list):
+        items = [str(t) for t in raw]
+    else:
+        items = []
+    return {t.strip().lower() for t in items if t and t.strip()}
+
+
+def _pickup_tags(pickup_date: date) -> list[str]:
+    return [PICKUP_TAG, f"{PICKUP_TAG}-{pickup_date.isoformat()}"]
+
+
+def _tag_pickup_order(
+    shop_domain: str,
+    access_token: str,
+    order: dict[str, Any],
+    pickup_date: date,
+) -> None:
+    """Etiqueta el pedido con ``retiro`` y ``retiro-AAAA-MM-DD``.
+
+    Best-effort: la etiqueta solo sirve para filtrar en el admin de Shopify; si
+    falla, el pedido igual queda guardado con su fecha. Solo llama a Shopify si
+    falta alguna etiqueta, así el ``orders/updated`` que dispara el propio
+    ``tagsAdd`` no vuelve a etiquetar.
+    """
+    missing = [t for t in _pickup_tags(pickup_date) if t not in _order_tags(order)]
+    if not missing:
+        return
+    order_gid = order.get("admin_graphql_api_id") or (
+        f"gid://shopify/Order/{_coerce_shopify_order_id(order['id'])}"
+    )
+    try:
+        data = graphql_call(
+            shop_domain,
+            access_token,
+            _TAGS_ADD,
+            {"id": order_gid, "tags": missing},
+            timeout=5,
+        )
+        errs = (data.get("tagsAdd") or {}).get("userErrors") or []
+        if errs:
+            logger.warning(
+                "No se pudo etiquetar el pedido de retiro",
+                extra={"order_gid": order_gid, "errors": errs},
+            )
+    except Exception:  # noqa: BLE001 — etiqueta best-effort
+        logger.exception(
+            "Error etiquetando el pedido de retiro", extra={"order_gid": order_gid}
+        )
 
 
 def _payment_gateways_for_storage(order: dict[str, Any]) -> list[str]:
@@ -324,6 +426,8 @@ def upsert_from_shopify_payload(
         order.get("updated_at") or order.get("updatedAt")
     )
     gateways = _payment_gateways_for_storage(order)
+    pickup_date, pickup_location = _pickup_from_order(order)
+    tag_with: tuple[str, str] | None = None
 
     with get_session() as session:
         inst = session.scalar(
@@ -366,6 +470,10 @@ def upsert_from_shopify_payload(
         row.line_items = lines
         row.shipping_lines = shipping if shipping else None
         row.payment_gateway_names = gateways or None
+        row.pickup_date = pickup_date
+        row.pickup_location = pickup_location
+        if pickup_date and inst and (inst.shopify_access_token or "").strip():
+            tag_with = (inst.shop_domain, inst.shopify_access_token.strip())
         # Cierre del ciclo de cotización (best-effort) si el pedido viene de un draft.
         _close_quote_for_order(
             session,
@@ -376,6 +484,9 @@ def upsert_from_shopify_payload(
         session.flush()
         out = row.to_dict()
         session.commit()
+    # Fuera de la transacción: una llamada lenta a Shopify no debe retener la sesión.
+    if tag_with and pickup_date:
+        _tag_pickup_order(tag_with[0], tag_with[1], order, pickup_date)
     return out
 
 
@@ -410,6 +521,7 @@ def list_orders_for_user(
     status: str | None,
     company_id: str | None,
     q_text: str | None = None,
+    pickup_date: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Lista pedidos visibles al usuario autenticado (token Cognito → usuario BD).
@@ -448,6 +560,15 @@ def list_orders_for_user(
                     ShopifyOrder.email.ilike(like),
                 )
             )
+        if pickup_date and pickup_date.strip():
+            if pickup_date.strip().lower() == "any":
+                q = q.where(ShopifyOrder.pickup_date.is_not(None))
+            else:
+                try:
+                    dia = date.fromisoformat(pickup_date.strip())
+                except ValueError as e:
+                    raise ValueError("pickup_date debe ser AAAA-MM-DD o 'any'") from e
+                q = q.where(ShopifyOrder.pickup_date == dia)
         q = q.order_by(
             desc(ShopifyOrder.shopify_updated_at), desc(ShopifyOrder.created_at)
         )

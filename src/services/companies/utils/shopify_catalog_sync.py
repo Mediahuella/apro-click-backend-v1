@@ -180,26 +180,32 @@ def sync_company_catalog(
     shopify_company_id: str | None,
     old_company_type: str | None,
     new_company_type: str,
-) -> None:
+) -> str:
     """Mueve las CompanyLocations de una empresa entre catálogos B2B al cambiar de segmento.
 
     No lanza: los errores se loguean como warnings para no bloquear la actualización de la BD.
+    Devuelve el resultado para que el llamador pueda avisarlo:
+
+    - ``"ok"``: la empresa quedó en el catálogo del segmento nuevo.
+    - ``"skipped"``: no había nada que mover (sin empresa en Shopify o mismo segmento).
+    - ``"no_catalog"``: el segmento nuevo todavía no tiene catálogo en Shopify.
+    - ``"error"``: Shopify falló; el CRM quedó actualizado pero el catálogo no.
     """
     if not shopify_company_id:
-        return
+        return "skipped"
     if old_company_type == new_company_type:
-        return
+        return "skipped"
 
     old_segment = COMPANY_TYPE_TO_SEGMENT.get(old_company_type or "")
     new_segment = COMPANY_TYPE_TO_SEGMENT.get(new_company_type)
     if not old_segment and not new_segment:
-        return
+        return "skipped"
 
     try:
         shop_domain, access_token = _resolve_shop_and_token()
     except LookupError as e:
         logger.warning("sync_company_catalog: no hay instalación Shopify activa — %s", e)
-        return
+        return "error"
 
     try:
         location_gids = _fetch_company_location_gids(shop_domain, access_token, shopify_company_id)
@@ -209,14 +215,16 @@ def sync_company_catalog(
             e,
             extra={"shopify_company_id": shopify_company_id},
         )
-        return
+        return "error"
 
     if not location_gids:
         logger.warning(
             "sync_company_catalog: empresa sin locations en Shopify",
             extra={"shopify_company_id": shopify_company_id},
         )
-        return
+        return "error"
+
+    resultado = "ok"
 
     # Quitar del catálogo anterior.
     if old_segment:
@@ -234,6 +242,7 @@ def sync_company_catalog(
                     old_segment,
                     e,
                 )
+                resultado = "error"
 
     # Agregar al catálogo nuevo.
     if new_segment:
@@ -251,6 +260,7 @@ def sync_company_catalog(
                     new_segment,
                     e,
                 )
+                resultado = "error"
         else:
             logger.warning(
                 "sync_company_catalog: el catálogo de %s no existe todavía en BD "
@@ -258,3 +268,5 @@ def sync_company_catalog(
                 new_segment,
                 extra={"shopify_company_id": shopify_company_id},
             )
+            return "no_catalog"
+    return resultado

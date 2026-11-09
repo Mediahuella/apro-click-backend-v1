@@ -67,7 +67,7 @@ from utils.cognito_quote_access import (  # noqa: E402
     accessible_company_uuids,
     is_platform_admin,
 )
-from utils.quotes_api_key import sign_pdf_token  # noqa: E402
+from utils.quotes_api_key import sign_pay_token, sign_pdf_token  # noqa: E402
 
 logger = Logger()
 
@@ -102,11 +102,147 @@ def pdf_email_url(quote_id: str) -> str:
     return f"{base}{suffix}" if base else suffix
 
 
+#: Estados en que la cotización se puede pagar: ya tiene Draft Order
+#: negociado y todavía no se convirtió en pedido.
+PAYABLE_STATUSES = ("COTIZADA", "INVOICE_SENT")
+
+
+def pay_url(quote_id: str) -> str:
+    """Link «Ir a pagar»: redirige al ``invoiceUrl`` del Draft Order."""
+    base = _public_base_url()
+    token = sign_pay_token(str(quote_id))
+    suffix = f"/api/v1/quotes/{quote_id}/pay?token={token}"
+    return f"{base}{suffix}" if base else suffix
+
+
+def _is_payable(d: dict[str, Any]) -> bool:
+    return (
+        bool(d.get("draft_order_gid"))
+        and not d.get("order_gid")
+        and d.get("status") in PAYABLE_STATUSES
+    )
+
+
 def _enrich(d: dict[str, Any]) -> dict[str, Any]:
-    """Agrega ``pdf_download_url`` (link tokenizado) si la cotización tiene PDF."""
+    """Agrega los links tokenizados: ``pdf_download_url`` si la cotización tiene
+    PDF y ``pay_url`` si ya tiene Draft Order y aún no es pedido."""
     if d.get("pdf_s3_key"):
         d["pdf_download_url"] = pdf_email_url(str(d.get("id")))
+    if _is_payable(d) and sign_pay_token(str(d.get("id"))):
+        d["pay_url"] = pay_url(str(d.get("id")))
     return d
+
+
+def _registrar_pedido(quote: QuoteRequest, order: dict[str, Any]) -> bool:
+    """Enlaza el pedido que Shopify generó desde el Draft Order de la cotización.
+
+    El webhook ``orders/create`` de ``orders`` no puede hacerlo: el payload REST
+    del pedido no trae el id del Draft Order de origen. Por eso, cuando el
+    cliente paga el link de la cotización, la única forma de saberlo es
+    preguntarle al Draft Order (``status: COMPLETED`` + ``order``).
+    Devuelve ``True`` si cambió algo.
+    """
+    order_gid = str(order.get("id") or "").strip()
+    if not order_gid:
+        return False
+    cambio = False
+    if quote.order_gid != order_gid:
+        quote.order_gid = order_gid
+        cambio = True
+    if quote.status in PAYABLE_STATUSES:
+        quote.status = "ACEPTADA"
+        cambio = True
+    return cambio
+
+
+def sync_completed_drafts(session: Session, quotes: list[QuoteRequest]) -> dict[str, dict]:
+    """Detecta las cotizaciones cuyo Draft Order ya se convirtió en pedido.
+
+    Solo consulta las que siguen «pagables» en la BD (draft sin pedido), en
+    una llamada ``nodes`` por tienda. Persiste ``order_gid`` + ``ACEPTADA`` en
+    la sesión (el commit es del llamador) y devuelve ``{order_gid: order}``
+    con lo que informó Shopify, para mostrar el pago aunque el webhook del
+    pedido todavía no haya llegado a ``shopify_orders``. Best-effort: si
+    Shopify falla, se registra y la cotización queda como estaba.
+    """
+    por_tienda: dict[str, list[QuoteRequest]] = {}
+    for q in quotes:
+        if q.draft_order_gid and not q.order_gid and q.status in PAYABLE_STATUSES:
+            por_tienda.setdefault(q.shop_domain, []).append(q)
+    pedidos: dict[str, dict] = {}
+    for shop_domain, grupo in por_tienda.items():
+        try:
+            estados = draft_order_service.fetch_drafts_state(
+                session, shop_domain, [q.draft_order_gid for q in grupo]
+            )
+        except Exception:
+            logger.exception(
+                "No se pudo consultar el estado de los Draft Orders",
+                extra={"shop_domain": shop_domain, "drafts": len(grupo)},
+            )
+            continue
+        for q in grupo:
+            order = (estados.get(q.draft_order_gid) or {}).get("order") or {}
+            if order.get("id") and _registrar_pedido(q, order):
+                pedidos[order["id"]] = order
+                logger.info(
+                    "Cotización enlazada al pedido de su Draft Order",
+                    extra={"quote_id": str(q.id), "order": order.get("name")},
+                )
+    return pedidos
+
+
+#: ``financial_status`` de Shopify (REST, minúsculas) → estado de pago que ve
+#: el cliente. Lo que no está aquí se informa tal cual.
+_PAYMENT_STATES = {
+    "paid": "PAGADA",
+    "partially_refunded": "PAGADA",
+    "pending": "PENDIENTE",
+    "authorized": "PENDIENTE",
+    "partially_paid": "PENDIENTE",
+    "refunded": "REEMBOLSADA",
+    "voided": "ANULADA",
+}
+
+
+def _attach_order(
+    session: Session, quotes: list[dict[str, Any]], desde_shopify: dict[str, dict] | None = None
+) -> None:
+    """Agrega ``order`` (``{id, name, financial_status, payment_state}``) a las
+    cotizaciones que ya son pedido.
+
+    Fuente: ``shopify_orders`` (al día por los webhooks ``orders/*``); si el
+    pedido aún no llegó ahí, lo que devolvió Shopify en ``sync_completed_drafts``.
+    """
+    desde_shopify = desde_shopify or {}
+    ids = {
+        _gid_tail(d.get("order_gid")): d
+        for d in quotes
+        if d.get("order_gid")
+    }
+    if not ids:
+        return
+    filas = {
+        str(r.shopify_order_id): r
+        for r in session.scalars(
+            select(ShopifyOrder).where(ShopifyOrder.shopify_order_id.in_(list(ids)))
+        )
+    }
+    for order_id, d in ids.items():
+        fila = filas.get(order_id)
+        if fila is not None:
+            name = fila.order_name or None
+            financial = (fila.financial_status or "").lower() or None
+        else:
+            remoto = desde_shopify.get(d["order_gid"]) or {}
+            name = remoto.get("name")
+            financial = (remoto.get("displayFinancialStatus") or "").lower() or None
+        d["order"] = {
+            "id": order_id,
+            "name": name,
+            "financial_status": financial,
+            "payment_state": _PAYMENT_STATES.get(financial or "", (financial or "").upper() or None),
+        }
 
 
 def _attach_seller(session: Session, quotes: list[dict[str, Any]]) -> None:
@@ -512,9 +648,15 @@ def list_quotes(
         rows = session.scalars(
             stmt.order_by(QuoteRequest.created_at.desc()).limit(limit).offset(offset)
         ).all()
+        pedidos = sync_completed_drafts(session, list(rows))
+        if pedidos:
+            session.flush()
         items = [_enrich(r.to_dict()) for r in rows]
         _attach_seller(session, items)
         _attach_contact(session, items)
+        _attach_order(session, items, pedidos)
+        if pedidos:
+            session.commit()
         return {"total": total, "items": items}
 
 
@@ -523,7 +665,13 @@ def get_quote(
     *,
     user: dict | None = None,
     shopify_company_id: str | None = None,
+    sync_order: bool = True,
 ) -> dict[str, Any] | None:
+    """Detalle de la cotización dentro del alcance de ``user``/``shopify_company_id``.
+
+    ``sync_order=False`` evita consultar el Draft Order en Shopify: para los
+    chequeos de alcance, que solo necesitan saber si la cotización es visible.
+    """
     try:
         qid = uuid.UUID(quote_id)
     except ValueError:
@@ -537,9 +685,15 @@ def get_quote(
                 return None
         if shopify_company_id and quote.shopify_company_id != shopify_company_id:
             return None
+        pedidos = sync_completed_drafts(session, [quote]) if sync_order else {}
+        if pedidos:
+            session.flush()
         data = _enrich(quote.to_dict())
         _attach_seller(session, [data])
         _attach_contact(session, [data])
+        _attach_order(session, [data], pedidos)
+        if pedidos:
+            session.commit()
         return data
 
 
@@ -701,13 +855,14 @@ def _create_quote_from_apro_ia_payload(
         apro_ia_folio=folio or None,
         apro_ia_status=status or None,
         folio=_unique_own_folio(session, folio, apro_ia_id) if folio else None,
+        shipping_line=_shipping_from_apro_ia(products),
     )
     line_no = 1
     for p in products:
         if not isinstance(p, dict):
             continue
         sku = str(p.get("sku") or "").strip()
-        if not sku:
+        if not sku or apro_ia_client.is_shipping_sku(sku):
             continue
         variant = draft_order_service.resolve_variant_by_sku(shop_domain, token, sku)
         if not variant:
@@ -735,6 +890,7 @@ def _create_quote_from_apro_ia_payload(
                 quantity=qty,
                 on_demand=False,
                 negotiated_unit_price=_to_decimal(p.get("price")),
+                comment=_line_comment(_apro_ia_product_comment(p)),
                 currency="CLP",
             )
         )
@@ -776,6 +932,49 @@ def _create_quote_from_apro_ia_payload(
     return quote
 
 
+def _shipping_from_apro_ia(products: Any) -> dict | None:
+    """El envío que trae ``products[]`` (producto ``COSTO DE ENVIO``), o ``None``.
+
+    Devuelve ``{title, price}`` con el formato de ``QuoteRequest.shipping_line``.
+    El título es el que mandamos (``COSTO DE ENVIO - <título>``) sin el prefijo.
+    """
+    if not isinstance(products, list):
+        return None
+    for p in products:
+        if not isinstance(p, dict) or not apro_ia_client.is_shipping_sku(p.get("sku")):
+            continue
+        price = _to_decimal(p.get("price"))
+        if price is None:
+            return None
+        name = str(p.get("name") or "").strip()
+        prefix = f"{apro_ia_client.SHIPPING_NAME} - "
+        title = name[len(prefix):].strip() if name.upper().startswith(prefix) else ""
+        return {"title": title or "Envío", "price": str(price)}
+    return None
+
+
+def _sync_shipping_from_apro_ia(quote: QuoteRequest, products: list[Any]) -> bool:
+    """Aplica el precio del envío que viene de APRO IA. ``True`` si cambió.
+
+    Si APRO IA no trae el producto de envío no se toca ``shipping_line``: las
+    cotizaciones anteriores a que el envío viajara como línea no lo tienen
+    allá, y borrarlo acá dejaría el Draft Order sin despacho.
+    """
+    incoming = _shipping_from_apro_ia(products)
+    if incoming is None:
+        return False
+    current = quote.shipping_line if isinstance(quote.shipping_line, dict) else None
+    if current and current.get("title"):
+        # Se conserva el título que eligió el cliente o SALES (la tarifa de
+        # Shopify); de APRO IA solo manda el precio.
+        if _to_decimal(current.get("price")) == _to_decimal(incoming["price"]):
+            return False
+        quote.shipping_line = {**current, "price": incoming["price"]}
+        return True
+    quote.shipping_line = incoming
+    return True
+
+
 def _sync_lines_from_apro_ia_products(
     session: Session, quote: QuoteRequest, products: list[Any]
 ) -> bool:
@@ -798,7 +997,7 @@ def _sync_lines_from_apro_ia_products(
     if not isinstance(products, list) or not products:
         return False
 
-    changed = False
+    changed = _sync_shipping_from_apro_ia(quote, products)
     by_sku = {(ln.sku or "").strip().lower(): ln for ln in quote.lines}
     seen_skus: set[str] = set()
     shop_domain: str | None = None
@@ -809,7 +1008,7 @@ def _sync_lines_from_apro_ia_products(
         if not isinstance(p, dict):
             continue
         sku = str(p.get("sku") or "").strip()
-        if not sku:
+        if not sku or apro_ia_client.is_shipping_sku(sku):
             continue
         sku_key = sku.lower()
         seen_skus.add(sku_key)
@@ -822,6 +1021,10 @@ def _sync_lines_from_apro_ia_products(
 
         existing = by_sku.get(sku_key)
         if existing:
+            # El comentario no va al Draft Order: se guarda sin marcar
+            # ``changed`` para no reescribir el draft por un comentario.
+            if apro_ia_client.LINE_COMMENT_FIELD in p or "comment" in p:
+                existing.comment = _line_comment(_apro_ia_product_comment(p))
             if existing.quantity != qty:
                 existing.quantity = qty
                 changed = True
@@ -860,6 +1063,7 @@ def _sync_lines_from_apro_ia_products(
             quantity=qty,
             on_demand=False,
             negotiated_unit_price=price,
+            comment=_line_comment(_apro_ia_product_comment(p)),
             currency="CLP",
         )
         session.add(new_line)
@@ -1623,6 +1827,16 @@ def _line_comment(value: Any) -> str | None:
     return text_value[:LINE_COMMENT_MAX_LEN] or None
 
 
+def _apro_ia_product_comment(product: dict[str, Any]) -> Any:
+    """Comentario de un producto del webhook de APRO IA.
+
+    El campo es ``comment_product``; ``comment`` se acepta como respaldo.
+    """
+    if apro_ia_client.LINE_COMMENT_FIELD in product:
+        return product.get(apro_ia_client.LINE_COMMENT_FIELD)
+    return product.get("comment")
+
+
 def _only_line_comments(body: dict[str, Any]) -> bool:
     """El PATCH trae solo comentarios de líneas existentes (``{id, comment}``)."""
     lines = body.get("lines")
@@ -1735,9 +1949,16 @@ def update_quote_lines(quote_id: str, body: dict[str, Any]) -> dict[str, Any]:
                     }
                 except (InvalidOperation, ValueError):
                     pass
-        # Si solo cambiaron comentarios de línea no se toca Shopify, el PDF ni
-        # APRO IA: el comentario es interno del panel y no viaja a ninguno.
+        # Si solo cambiaron comentarios de línea no se toca Shopify (el Draft
+        # Order no los lleva). Viajan a APRO IA —y se baja su PDF— solo con
+        # ``APRO_IA_LINE_COMMENTS`` activo y si la cotización ya existe allá.
         if _only_line_comments(body):
+            if (
+                apro_ia_client.line_comments_enabled()
+                and quote.apro_ia_folio
+                and quote.status in ("COTIZADA", "INVOICE_SENT")
+            ):
+                _sync_apro_ia_and_pdf(session, quote)
             result = quote.to_dict()
             session.commit()
             return result
@@ -1846,7 +2067,7 @@ def _sync_apro_ia_and_pdf(
     if not seller_email:
         seller_email = _seller_email(session, company)
 
-    productos = apro_ia_client.build_productos(quote.lines)
+    productos = apro_ia_client.build_productos(quote.lines, quote.shipping_line)
 
     try:
         if quote.apro_ia_folio:
@@ -2027,6 +2248,47 @@ def complete(quote_id: str) -> dict[str, Any]:
         result["draft_order"] = draft
         session.commit()
         return result
+
+
+class QuoteNotPayableError(ValueError):
+    """La cotización no se puede pagar (sin Draft Order, ya es pedido, anulada…)."""
+
+
+def get_payment_url(quote_id: str) -> str:
+    """Devuelve a dónde mandar al cliente que abre el link «Ir a pagar».
+
+    - Draft Order abierto → su ``invoiceUrl``: el mismo link de pago que
+      Shopify manda por correo con ``draftOrderInvoiceSend``. Al pagarlo, el
+      checkout convierte el Draft Order en pedido. No envía el correo ni
+      cambia el estado de la cotización.
+    - Draft Order ya convertido en pedido (cotización pagada, o el link se abre
+      de nuevo desde un correo viejo) → enlaza el pedido a la cotización y
+      devuelve su ``statusPageUrl``, para que el cliente vea su pedido en vez
+      de un error.
+    """
+    with get_session() as session:
+        quote = _load_for_negotiation(session, quote_id)
+        if not quote.draft_order_gid:
+            raise QuoteNotPayableError("Esta cotización aún no está lista para pagar.")
+        draft = draft_order_service.fetch_invoice_url(session, quote)
+        order = draft.get("order") or {}
+        if order.get("id"):
+            if _registrar_pedido(quote, order):
+                session.commit()
+            status_url = str(order.get("statusPageUrl") or "").strip()
+            if status_url.startswith("https://"):
+                return status_url
+            raise QuoteNotPayableError(
+                f"Esta cotización ya generó el pedido {order.get('name') or ''}.".replace(" .", ".")
+            )
+        if quote.order_gid:
+            raise QuoteNotPayableError("Esta cotización ya generó un pedido.")
+        if quote.status not in PAYABLE_STATUSES:
+            raise QuoteNotPayableError("Esta cotización ya no se puede pagar.")
+        url = str(draft.get("invoiceUrl") or "").strip()
+        if not url.startswith("https://"):
+            raise QuoteNotPayableError("Shopify no entregó el link de pago de la cotización.")
+        return url
 
 
 def get_shipping_rates(quote_id: str, auth_header: str = "") -> list[dict]:

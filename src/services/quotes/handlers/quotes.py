@@ -4,6 +4,9 @@
 - ``GET /api/v1/quotes`` y ``GET /api/v1/quotes/{id}`` — Cognito (panel) o storefront
   (X-Api-Key + ``shopify_company_id`` query).
 - ``GET /api/v1/quotes/{id}/pdf`` — Cognito / storefront / email (token HMAC); 302 al presigned.
+- ``GET /api/v1/quotes/{id}/pay?token=`` — token HMAC propio (``pay_url`` del
+  listado/detalle); 302 al ``invoiceUrl`` del Draft Order (el mismo link de pago
+  que Shopify manda por correo). Al pagarlo, el checkout genera el pedido.
 - ``PATCH /api/v1/quotes/{id}`` y ``POST .../draft|invoice|complete``, ``GET .../shipping-rates``
   — SALES/ADMIN/SUPERADMIN, y además acotado a las empresas visibles del usuario
   (``_ensure_quote_in_scope``): un SALES no puede negociar cotizaciones de una
@@ -22,6 +25,7 @@
 from __future__ import annotations
 
 import sys
+from html import escape
 from pathlib import Path
 
 from aws_lambda_powertools import Logger, Tracer
@@ -64,6 +68,7 @@ from utils.cognito_quote_access import (  # noqa: E402
 from utils.quotes_api_key import (  # noqa: E402
     require_apro_ia_webhook_key,
     require_quotes_api_key,
+    verify_pay_token,
     verify_pdf_token,
 )
 
@@ -112,7 +117,7 @@ def _ensure_quote_in_scope(quote_id: str, user: dict) -> None:
     ``quote_id``. Reusa ``quote_service.get_quote`` (mismo scope que el
     listado): SUPERADMIN/ADMIN ven todo, SALES solo sus empresas asignadas.
     """
-    if not quote_service.get_quote(quote_id, user=user):
+    if not quote_service.get_quote(quote_id, user=user, sync_order=False):
         raise NotFoundError("Cotización no encontrada")
 
 
@@ -325,13 +330,13 @@ def download_pdf(quote_id: str):
                 if not shopify_company_id:
                     raise BadRequestError("shopify_company_id es obligatorio")
                 if not quote_service.get_quote(
-                    quote_id, shopify_company_id=shopify_company_id
+                    quote_id, shopify_company_id=shopify_company_id, sync_order=False
                 ):
                     raise NotFoundError("Cotización no encontrada")
             else:
                 if user.get("role") not in READ_ROLES:
                     raise ForbiddenError("Sin permisos para ver cotizaciones")
-                if not quote_service.get_quote(quote_id, user=user):
+                if not quote_service.get_quote(quote_id, user=user, sync_order=False):
                     raise NotFoundError("Cotización no encontrada")
         url = quote_service.get_pdf_presigned_url(quote_id)
         if not url:
@@ -344,6 +349,40 @@ def download_pdf(quote_id: str):
     except Exception:
         logger.exception("Error descargando PDF de cotización")
         raise InternalServerError("Error descargando PDF de cotización")
+
+
+def _pagina_pago(status_code: int, titulo: str, mensaje: str) -> Response:
+    """Página mínima para quien abre el link «Ir a pagar» en el navegador."""
+    body = (
+        "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{escape(titulo)}</title></head>"
+        "<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;"
+        "padding:0 1rem;color:#1a1a1a\">"
+        f"<h1 style=\"font-size:1.25rem\">{escape(titulo)}</h1>"
+        f"<p>{escape(mensaje)}</p></body></html>"
+    )
+    return Response(status_code=status_code, content_type="text/html; charset=utf-8", body=body)
+
+
+@app.get("/api/v1/quotes/<quote_id>/pay")
+@tracer.capture_method
+def pay_quote(quote_id: str):
+    """«Ir a pagar»: redirige al link de pago del Draft Order de la cotización."""
+    if not verify_pay_token(quote_id, _params().get("token")):
+        return _pagina_pago(401, "Link no válido", "El link de pago no es válido.")
+    try:
+        url = quote_service.get_payment_url(quote_id)
+    except LookupError:
+        return _pagina_pago(404, "Cotización no encontrada", "No encontramos esta cotización.")
+    except quote_service.QuoteNotPayableError as e:
+        return _pagina_pago(409, "No se puede pagar", str(e))
+    except Exception:
+        logger.exception("Error obteniendo el link de pago de la cotización", extra={"quote_id": quote_id})
+        return _pagina_pago(
+            502, "No se pudo abrir el pago", "Intenta nuevamente en unos minutos o contacta a tu vendedor."
+        )
+    return Response(status_code=302, content_type="text/plain", body="", headers={"Location": url})
 
 
 @app.post("/api/v1/quotes/<quote_id>/draft")

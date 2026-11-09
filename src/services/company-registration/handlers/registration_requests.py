@@ -11,6 +11,7 @@ from aws_lambda_powertools.event_handler.exceptions import (
     ForbiddenError,
     InternalServerError,
     NotFoundError,
+    ServiceError,
     UnauthorizedError,
 )
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -165,6 +166,67 @@ def get_request(request_id: str):
     except Exception:
         logger.exception("Error obteniendo solicitud")
         raise InternalServerError("Error obteniendo solicitud")
+
+
+@app.post("/api/v1/company-registration-requests/credit/url")
+@tracer.capture_method
+def credit_request_url_for_rut():
+    """Link de APRO para solicitar crédito desde el formulario, antes del alta.
+
+    Público (misma ``X-Api-Key`` que el alta), body ``{"rut": "..."}``. Lo
+    consume el bloque de prueba ``apro-click.register-credito.liquid`` en
+    cuanto la empresa elige «Crédito». El ambiente de APRO lo fija
+    ``APRO_CREDIT_URL_ENV``.
+    """
+    try:
+        require_registration_api_key(_headers_dict())
+        body = app.current_event.json_body or {}
+        rut = body.get("rut") if isinstance(body, dict) else None
+        if not isinstance(rut, str) or not rut.strip():
+            raise BadRequestError("Falta el RUT")
+        url = _svc.credit_request_url_for_rut(rut)
+        return {"statusCode": 200, "message": "OK", "data": {"url": url}}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except RuntimeError:
+        raise ServiceError(502, "No se pudo obtener el link de solicitud de crédito")
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError, ServiceError):
+        raise
+    except Exception:
+        logger.exception("Error pidiendo el link de solicitud de crédito por RUT (registro)")
+        raise InternalServerError("Error pidiendo el link de solicitud de crédito")
+
+
+@app.post("/api/v1/company-registration-requests/<request_id>/credit/url")
+@tracer.capture_method
+def credit_request_url(request_id: str):
+    """Link de APRO para solicitar crédito justo después de registrarse.
+
+    Público (misma ``X-Api-Key`` que el alta). Lo consume el bloque de prueba
+    ``apro-click.register-credito.liquid`` con el ``id`` que devolvió el
+    ``POST`` de alta. Solo responde para solicitudes pendientes, con
+    ``payment_type = CREDIT`` y de las últimas 24 horas. El ambiente de APRO lo
+    fija ``APRO_CREDIT_URL_ENV``.
+    """
+    try:
+        require_registration_api_key(_headers_dict())
+        url = _svc.credit_request_url(request_id)
+        return {"statusCode": 200, "message": "OK", "data": {"url": url}}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except LookupError as e:
+        raise NotFoundError(str(e))
+    except RuntimeError:
+        raise ServiceError(502, "No se pudo obtener el link de solicitud de crédito")
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (UnauthorizedError, ForbiddenError, BadRequestError, NotFoundError, ServiceError):
+        raise
+    except Exception:
+        logger.exception("Error pidiendo el link de solicitud de crédito (registro)")
+        raise InternalServerError("Error pidiendo el link de solicitud de crédito")
 
 
 @app.post("/api/v1/company-registration-requests/<request_id>/approve")

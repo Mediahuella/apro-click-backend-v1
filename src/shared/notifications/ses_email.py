@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from html import escape
 
 import boto3
 from botocore.exceptions import ClientError
@@ -200,8 +201,14 @@ def notify_approval(
     contact_email: str,
     contact_name: str,
     company_name: str,
+    seller_name: str | None = None,
+    credit_url: str | None = None,
 ) -> None:
-    """Notifica al solicitante que su empresa fue aprobada."""
+    """Notifica al solicitante que su empresa fue aprobada.
+
+    Con ``seller_name`` presenta al vendedor asignado; con ``credit_url`` (la
+    empresa quedó al contado) agrega el link de APRO para solicitar crédito.
+    """
     subject = "Tu solicitud de empresa fue aprobada — Apro Click"
     preheader = f"La solicitud de {company_name} fue aprobada. Ya puedes acceder."
     content = f"""
@@ -214,6 +221,38 @@ def notify_approval(
         y acceder a los precios y condiciones B2B disponibles para
         <b style="color:{BRAND_DARK};">{company_name}</b>.
       </p>
+    """
+    vendedor = (seller_name or "").strip()
+    if vendedor:
+        content += f"""
+      <p style="margin:0 0 14px 0;">
+        Tu vendedor asignado es <b style="color:{BRAND_DARK};">{escape(vendedor)}</b>,
+        quien te acompañará en tus compras y podrá resolver tus dudas.
+      </p>
+    """
+    if credit_url and credit_url.startswith("https://"):
+        content += f"""
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-left:3px solid {BRAND_BUTTON};
+                    border-radius:6px;margin:12px 0;">
+        <tr>
+          <td style="padding:14px 16px;">
+            <p style="margin:0 0 6px 0;font-weight:600;color:{BRAND_DARK};">
+              ¿Quieres comprar con crédito?
+            </p>
+            <p style="margin:0 0 12px 0;">
+              Tu empresa parte con pago al contado. Si quieres pagar con crédito,
+              completa la solicitud con APRO y te avisaremos cuando quede aprobada.
+            </p>
+            <a href="{escape(credit_url, quote=True)}"
+               style="display:inline-block;background:{BRAND_BUTTON};color:#FFFFFF;
+                      text-decoration:none;font-weight:600;font-size:14px;
+                      padding:10px 20px;border-radius:8px;">
+              Solicitar crédito
+            </a>
+          </td>
+        </tr>
+      </table>
     """
     html = _layout(
         preheader=preheader,
@@ -600,3 +639,66 @@ def notify_pago_credito_cliente(
         portal_apro=True,
     )
     _enviar([contact_email], subject, html)
+
+
+#: Tienda con UTM propia, para separar en Shopify Analytics las visitas que
+#: llegan desde este aviso de las de la campaña masiva (``credito-apro-activo``).
+STORE_CREDITO_APROBADO_URL = (
+    "https://www.aproclick.cl/?utm_source=email&utm_medium=email&utm_campaign=credito-aprobado"
+)
+
+
+def notify_credito_aprobado(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+) -> None:
+    """Avisa al cliente que APRO aprobó el crédito de su empresa.
+
+    Sale cuando la empresa pasa de ``DIRECT`` a ``CREDIT`` (webhook de estado
+    de crédito o corrida diaria de ``creditSync``): desde ese momento el
+    checkout ya le muestra «Crédito Apro».
+    """
+    if not contact_email:
+        return
+    paso = "padding:6px 0;vertical-align:top;"
+    numero = (
+        f"display:inline-block;width:24px;height:24px;line-height:24px;"
+        f"border-radius:12px;background:{BRAND_BUTTON};color:#FFFFFF;"
+        f"font-size:13px;font-weight:600;text-align:center;"
+    )
+    content = f"""
+      <h1 style="margin:0 0 12px 0;font-size:22px;color:{BRAND_DARK};">
+        Tu crédito Apro fue aprobado
+      </h1>
+      <p style="margin:0 0 14px 0;">{f"Hola {contact_name}," if contact_name else "Hola,"}</p>
+      <p style="margin:0 0 14px 0;">
+        Te contamos que aprobamos el <b>crédito Apro</b> de
+        <b style="color:{BRAND_DARK};">{company_name}</b>. Desde ahora puedes pagar
+        tus pedidos en Apro Click con el método de pago <b>«Crédito Apro»</b>,
+        directamente en el checkout.
+      </p>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
+             style="background:{BG_PAGE};border-radius:10px;padding:16px 18px;margin:6px 0 4px 0;">
+        <tr><td colspan="2" style="padding:0 0 8px 0;font-weight:600;color:{BRAND_DARK};">
+          ¿Cómo usarlo?
+        </td></tr>
+        <tr><td width="36" style="{paso}"><span style="{numero}">1</span></td>
+            <td style="{paso}">Inicia sesión en Apro Click con tu cuenta de empresa.</td></tr>
+        <tr><td width="36" style="{paso}"><span style="{numero}">2</span></td>
+            <td style="{paso}">Agrega los productos que necesitas al carrito.</td></tr>
+        <tr><td width="36" style="{paso}"><span style="{numero}">3</span></td>
+            <td style="{paso}">En el checkout, selecciona <b>«Crédito Apro»</b> como método de pago.</td></tr>
+      </table>
+      <p style="margin:16px 0 0 0;color:{TEXT_MUTED};font-size:13px;">
+        Las condiciones de tu crédito son las acordadas con Apro. Si tienes dudas,
+        escríbele a tu ejecutivo comercial.
+      </p>
+    """
+    html = _layout(
+        preheader=f"{company_name} ya puede pagar sus pedidos con Crédito Apro en Apro Click.",
+        content_html=content,
+        cta=("Comprar en Apro Click", STORE_CREDITO_APROBADO_URL),
+        portal_apro=True,
+    )
+    _enviar([contact_email], "Tu crédito Apro fue aprobado", html)

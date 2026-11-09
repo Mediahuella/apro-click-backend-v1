@@ -99,3 +99,57 @@ def test_cambio_de_precio_sigue_actualizando_el_draft(cotizada):
         {"lines": [{"id": line_id, "negotiated_unit_price": "1000", "comment": "ok"}]},
     )
     assert efectos == ["draft", "pdf"]
+
+
+# ---------------------------------------------------------------------------
+# Productos que se mandan a APRO IA: envío como línea y comentario por línea
+# ---------------------------------------------------------------------------
+from services import apro_ia_client  # noqa: E402
+
+
+def _linea(**kw):
+    base = dict(line_number=1, sku="SKU-1", title="Casco", quantity=2,
+                negotiated_unit_price=1000, comment=None)
+    base.update(kw)
+    return QuoteRequestLine(**base)
+
+
+def test_envio_va_como_linea_costo_de_envio():
+    productos = apro_ia_client.build_productos(
+        [_linea()], {"title": "Starken", "price": "3990.00"}, include_comments=False
+    )
+    assert productos[-1] == {
+        "sku": apro_ia_client.DEFAULT_SHIPPING_SKU,
+        "name": "COSTO DE ENVIO - Starken",
+        "price": 3990,
+        "amount": 1,
+        "total": 3990,
+    }
+    assert len(productos) == 2
+
+
+def test_sin_envio_no_agrega_linea():
+    assert len(apro_ia_client.build_productos([_linea()], None)) == 1
+
+
+def test_comentario_de_linea_solo_con_el_flag(monkeypatch):
+    lineas = [_linea(comment="Entrega en 15 días")]
+    monkeypatch.delenv("APRO_IA_LINE_COMMENTS", raising=False)
+    assert "comment_product" not in apro_ia_client.build_productos(lineas)[0]
+    monkeypatch.setenv("APRO_IA_LINE_COMMENTS", "true")
+    producto = apro_ia_client.build_productos(lineas)[0]
+    assert producto["comment_product"] == "Entrega en 15 días"
+    assert "comment" not in producto
+
+
+def test_comentario_viaja_a_apro_ia_con_el_flag(cotizada, monkeypatch):
+    qid, line_id, efectos = cotizada
+    with quote_service.get_session() as session:
+        quote = session.get(QuoteRequest, uuid_mod.UUID(qid))
+        quote.apro_ia_folio = "AC-000999"
+        session.commit()
+    monkeypatch.setenv("APRO_IA_LINE_COMMENTS", "true")
+
+    quote_service.update_quote_lines(qid, {"lines": [{"id": line_id, "comment": "ok"}]})
+
+    assert efectos == ["pdf"]  # APRO IA + PDF, sin reescribir el Draft Order

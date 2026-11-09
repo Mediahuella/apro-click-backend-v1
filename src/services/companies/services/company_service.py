@@ -29,6 +29,7 @@ for path in possible_shared_paths:
         break
 
 from database.engine import get_session
+from database.models.audit_log import AuditLog
 from database.models.client import Client
 from database.models.company import Company
 from database.models.conversation import Conversation
@@ -102,13 +103,14 @@ def _attach_assigned_sales_user(
             User.given_name,
             User.family_name,
             User.email,
+            User.codigo_sap,
         )
         .join(User, User.id == UserCompany.user_id)
         .where(UserCompany.company_id.in_(company_ids), User.role == "SALES")
         .order_by(UserCompany.company_id, User.id)
     ).all()
     by_company: dict[str, dict[str, Any]] = {}
-    for company_id, user_id, given_name, family_name, email in rows:
+    for company_id, user_id, given_name, family_name, email, codigo_sap in rows:
         key = str(company_id)
         if key in by_company:
             continue
@@ -117,6 +119,7 @@ def _attach_assigned_sales_user(
             "given_name": given_name,
             "family_name": family_name,
             "email": email,
+            "codigo_sap": codigo_sap,
         }
     for c in companies:
         c["assigned_sales_user"] = by_company.get(c["id"])
@@ -152,7 +155,11 @@ class CompanyService:
                     Company.shopify_company_id.in_([numerico, gid])
                 )
             )
-            return company.to_dict() if company else None
+            if not company:
+                return None
+            result = company.to_dict()
+            _attach_assigned_sales_user(session, [result])
+            return result
 
     def create_company(
         self,
@@ -416,6 +423,96 @@ class CompanyService:
         if new_payment_type and new_payment_type != old_payment_type:
             sync_company_credit_metafield(shopify_company_id, new_payment_type)
 
+        return result
+
+    #: Roles que pueden cambiar la lista de precios de cualquier empresa.
+    PRICE_LIST_ADMIN_ROLES = frozenset({"SUPERADMIN", "ADMIN"})
+
+    @staticmethod
+    def _in_portfolio(session: Session, company: Company, user_id: uuid.UUID) -> bool:
+        """La empresa está en la cartera del vendedor: vinculada en
+        ``user_companies`` o registrada desde su link (mismo criterio que
+        ``list_companies(assigned_user_id=…)``, que alimenta «Mis empresas»)."""
+        if company.referred_by_user_id == user_id:
+            return True
+        return (
+            session.scalar(
+                select(UserCompany.company_id).where(
+                    UserCompany.company_id == company.id,
+                    UserCompany.user_id == user_id,
+                )
+            )
+            is not None
+        )
+
+    def change_price_list(
+        self, company_id: str, company_type: str, *, actor: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Cambia la lista de precios (``company_type`` → catálogo B2B del segmento).
+
+        SUPERADMIN/ADMIN pueden cambiar cualquier empresa; SALES solo las de su
+        cartera. Deja registro en ``audit_logs`` y mueve la empresa al catálogo
+        del segmento nuevo en Shopify. Devuelve la empresa más
+        ``catalog_sync`` (``ok``/``skipped``/``no_catalog``/``error``): si
+        Shopify falla, el CRM queda actualizado y el llamador debe avisarlo.
+
+        Lanza ``ValueError`` (dato inválido), ``LookupError`` (no existe o,
+        para SALES, fuera de su cartera) y ``PermissionError`` (rol sin permiso).
+        """
+        self._validate_uuid(company_id)
+        new_type = self._validate_company_type(str(company_type or ""))
+        role = str(actor.get("role") or "").upper()
+        if role not in self.PRICE_LIST_ADMIN_ROLES and role != "SALES":
+            raise PermissionError("Sin permisos para cambiar la lista de precios")
+        actor_id = uuid.UUID(str(actor["id"]))
+
+        with get_session() as session:
+            company = session.get(Company, uuid.UUID(company_id))
+            if company is None or company.is_system:
+                raise LookupError("Empresa no encontrada")
+            if role == "SALES" and not self._in_portfolio(session, company, actor_id):
+                # Igual que «no existe»: el vendedor no distingue empresas ajenas.
+                raise LookupError("Empresa no encontrada")
+
+            old_type = company.company_type
+            shopify_company_id = company.shopify_company_id
+            if old_type == new_type:
+                result = company.to_dict()
+                result["catalog_sync"] = "skipped"
+                return result
+
+            company.company_type = new_type
+            session.add(
+                AuditLog(
+                    entity_type="company",
+                    entity_id=str(company.id),
+                    action="price_list_changed",
+                    actor_user_id=actor_id,
+                    metadata_={"from": old_type, "to": new_type, "role": role},
+                )
+            )
+            session.commit()
+            session.refresh(company)
+            result = company.to_dict()
+
+        catalog_sync = sync_company_catalog(shopify_company_id, old_type, new_type)
+        if catalog_sync != "ok":
+            logger.warning(
+                "Lista de precios cambiada en el CRM sin mover el catálogo en Shopify",
+                extra={"company_id": company_id, "catalog_sync": catalog_sync},
+            )
+        logger.info(
+            "Lista de precios cambiada",
+            extra={
+                "company_id": company_id,
+                "from": old_type,
+                "to": new_type,
+                "actor_user_id": str(actor_id),
+                "role": role,
+                "catalog_sync": catalog_sync,
+            },
+        )
+        result["catalog_sync"] = catalog_sync
         return result
 
     def delete_company(self, company_id: str) -> bool:

@@ -91,6 +91,8 @@ def list_orders():
         # company_id en query es opcional (refinar); no hace falta para filtrar por empresas asignadas.
         company_id = params.get("company_id")
         q_text = params.get("q")
+        # ?pickup_date=AAAA-MM-DD → retiros de ese día; ?pickup_date=any → todos los retiros.
+        pickup_date = params.get("pickup_date")
         data = list_orders_for_user(
             user,
             limit=limit,
@@ -98,6 +100,7 @@ def list_orders():
             status=status,
             company_id=company_id,
             q_text=q_text,
+            pickup_date=pickup_date,
         )
         return {"statusCode": 200, "message": "OK", "data": data}
     except UnauthorizedError:

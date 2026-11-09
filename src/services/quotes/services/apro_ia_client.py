@@ -198,25 +198,92 @@ def descargar_pdf(folio: str, *, env: str = ENV_PROD) -> bytes:
     return raw
 
 
-def build_productos(lines: list[Any]) -> list[dict[str, Any]]:
-    """Convierte líneas de QuoteRequest al formato de productos de APRO IA."""
+#: SKU con que APRO cobra el despacho en sus cotizaciones («COSTO DE ENVIO»,
+#: visto en el DMS). El envío de la cotización viaja como un producto más con
+#: este SKU; al volver por el webhook se reconoce por el mismo SKU y no se
+#: trata como una línea de catálogo.
+DEFAULT_SHIPPING_SKU = "00000300000013"
+SHIPPING_NAME = "COSTO DE ENVIO"
+
+
+def shipping_sku() -> str:
+    return (os.environ.get("APRO_IA_SHIPPING_SKU") or "").strip() or DEFAULT_SHIPPING_SKU
+
+
+def is_shipping_sku(sku: Any) -> bool:
+    return str(sku or "").strip().lower() == shipping_sku().lower()
+
+
+# Nombre del campo de comentario por producto en el contrato de APRO IA.
+LINE_COMMENT_FIELD = "comment_product"
+
+
+def line_comments_enabled() -> bool:
+    """``True`` si el comentario de cada línea se manda a APRO IA.
+
+    APRO IA recibe el comentario de cada producto en
+    ``products[].comment_product`` (``LINE_COMMENT_FIELD``); se manda solo con
+    ``APRO_IA_LINE_COMMENTS=true``,
+    para no arriesgar que un DMS que no lo conozca rechace la cotización
+    completa. La lectura desde el webhook está siempre activa: si APRO IA no
+    lo manda, no cambia nada.
+    """
+    return (os.environ.get("APRO_IA_LINE_COMMENTS") or "").strip().lower() in (
+        "1", "true", "yes", "si", "sí",
+    )
+
+
+def _producto(sku: str, name: str, unit: Any, qty: int) -> dict[str, Any]:
     from decimal import Decimal
 
+    unit = Decimal(unit)
+    return {
+        "sku": sku,
+        "name": name,
+        "price": int(unit.quantize(Decimal("1"))),
+        "amount": qty,
+        "total": int((unit * qty).quantize(Decimal("1"))),
+    }
+
+
+def build_productos(
+    lines: list[Any],
+    shipping_line: dict | None = None,
+    *,
+    include_comments: bool | None = None,
+) -> list[dict[str, Any]]:
+    """Convierte líneas de QuoteRequest al formato de productos de APRO IA.
+
+    Si la cotización tiene envío, se agrega al final como el producto
+    ``COSTO DE ENVIO`` (``shipping_sku()``), con el precio neto del envío.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if include_comments is None:
+        include_comments = line_comments_enabled()
+
     result = []
-    for ln in lines:
+    for ln in sorted(lines, key=lambda x: x.line_number or 0):
         unit = ln.negotiated_unit_price
         if unit is None:
             unit = ln.requested_unit_price
         if unit is None:
             unit = Decimal("0")
-        unit = Decimal(unit)
-        qty = int(ln.quantity or 1)
-        total = int((unit * qty).quantize(Decimal("1")))
-        result.append({
-            "sku": ln.sku or "",
-            "name": ln.title or ln.sku or "",
-            "price": int(unit.quantize(Decimal("1"))),
-            "amount": qty,
-            "total": total,
-        })
+        producto = _producto(
+            ln.sku or "", ln.title or ln.sku or "", unit, int(ln.quantity or 1)
+        )
+        comment = (getattr(ln, "comment", None) or "").strip()
+        if include_comments and comment:
+            producto[LINE_COMMENT_FIELD] = comment
+        result.append(producto)
+
+    if isinstance(shipping_line, dict) and shipping_line.get("title"):
+        try:
+            price = Decimal(str(shipping_line.get("price") or "0"))
+        except (InvalidOperation, ValueError):
+            price = None
+        if price is not None:
+            title = str(shipping_line["title"]).strip()
+            name = f"{SHIPPING_NAME} - {title}" if title else SHIPPING_NAME
+            result.append(_producto(shipping_sku(), name, price, 1))
     return result

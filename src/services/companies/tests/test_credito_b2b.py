@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 
 from database.base import Base  # noqa: E402
 import database.models  # noqa: E402,F401  registra los modelos en Base
+from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
 from services import company_service as company_service_mod  # noqa: E402
 from apro import credit_client  # noqa: E402
@@ -436,3 +437,348 @@ def test_get_company_by_shopify_id_acepta_gid_y_numerico(monkeypatch):
     assert por_gid["id"] == por_numero["id"]
     assert servicio.get_company_by_shopify_id("  ") is None
     assert servicio.get_company_by_shopify_id("gid://shopify/Company/999") is None
+    assert por_gid["assigned_sales_user"] is None, "sin vendedor asignado"
+
+
+# ---------------------------------------------------------------------------
+# Webhook de APRO: cambio de estado del crédito
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def bd_webhook(monkeypatch):
+    """BD SQLite en memoria enchufada al servicio de crédito."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    @contextmanager
+    def _get_session():
+        session = Session(engine)
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr(credit_sync_service, "get_session", _get_session)
+    monkeypatch.setattr(
+        credit_sync_service, "_resolve_shop_and_token", lambda: ("tienda.myshopify.com", "tok")
+    )
+    monkeypatch.delenv("APRO_CREDIT_FORCE_RUTS", raising=False)
+    return _get_session
+
+
+def _guardar(get_session, **kw) -> None:
+    with get_session() as session:
+        session.add(_empresa(**kw))
+        session.commit()
+
+
+def _payment_type_en_bd(get_session) -> list[str]:
+    with get_session() as session:
+        return [c.payment_type for c in session.query(Company).order_by(Company.name)]
+
+
+def test_webhook_enciende_el_credito_y_el_metafield(bd_webhook, metafields_escritos):
+    _guardar(bd_webhook, payment_type="DIRECT", billing_rut="76.486.379-8")
+
+    r = credit_sync_service.aplicar_webhook_credito(
+        {"rut": "76486379-8", "status": "Aprobada Continental"}
+    )
+
+    assert _payment_type_en_bd(bd_webhook) == ["CREDIT"]
+    assert metafields_escritos == [("3538649272", "CREDIT")]
+    assert r["matched"] is True and r["payment_type"] == "CREDIT"
+    assert r["empresas"][0]["cambio"] is True
+
+
+def test_webhook_resuelve_shopify_antes_de_abrir_la_sesion(bd_webhook, monkeypatch):
+    """Con ``pool_size=1``, resolver la tienda con la sesión abierta cuelga la Lambda."""
+    _guardar(bd_webhook, payment_type="DIRECT")
+    sesion_abierta = False
+    get_session_original = credit_sync_service.get_session
+
+    @contextmanager
+    def _get_session_vigilada():
+        nonlocal sesion_abierta
+        sesion_abierta = True
+        try:
+            with get_session_original() as session:
+                yield session
+        finally:
+            sesion_abierta = False
+
+    def _resolver():
+        assert not sesion_abierta, "se pidió una segunda conexión con la sesión abierta"
+        return ("tienda.myshopify.com", "tok")
+
+    llamadas: list = []
+
+    def _sync(shopify_company_id, payment_type, *, shop_domain="", access_token=""):
+        llamadas.append((shop_domain, access_token))
+        return True
+
+    monkeypatch.setattr(credit_sync_service, "get_session", _get_session_vigilada)
+    monkeypatch.setattr(credit_sync_service, "_resolve_shop_and_token", _resolver)
+    monkeypatch.setattr(credit_sync_service, "sync_company_credit_metafield", _sync)
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": "Aprobada Orsan"})
+
+    assert llamadas == [("tienda.myshopify.com", "tok")]
+
+
+def test_webhook_apaga_el_credito(bd_webhook, metafields_escritos):
+    _guardar(bd_webhook, payment_type="CREDIT")
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "764863798", "status": "Crédito Rechazado"})
+
+    assert _payment_type_en_bd(bd_webhook) == ["DIRECT"]
+    assert metafields_escritos == [("3538649272", "DIRECT")]
+
+
+def test_webhook_sin_cambio_reescribe_el_metafield(bd_webhook, metafields_escritos):
+    """Un reintento repara el metafield si Shopify falló la vez anterior."""
+    _guardar(bd_webhook, payment_type="CREDIT")
+
+    r = credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": True})
+
+    assert r["empresas"][0]["cambio"] is False
+    assert metafields_escritos == [("3538649272", "CREDIT")]
+
+
+def test_webhook_actualiza_todas_las_empresas_del_rut(bd_webhook, metafields_escritos):
+    _guardar(bd_webhook, name="A", shopify_company_id="1")
+    _guardar(bd_webhook, name="B", shopify_company_id="2")
+    _guardar(bd_webhook, name="OTRA", billing_rut="11111111-1", shopify_company_id="3")
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": True})
+
+    assert _payment_type_en_bd(bd_webhook) == ["CREDIT", "CREDIT", "DIRECT"]
+    assert sorted(metafields_escritos) == [("1", "CREDIT"), ("2", "CREDIT")]
+
+
+def test_webhook_ignora_empresas_de_sistema(bd_webhook, metafields_escritos):
+    _guardar(bd_webhook, is_system=True)
+
+    r = credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": True})
+
+    assert r["ignored"] is True
+    assert metafields_escritos == []
+
+
+def test_webhook_rut_desconocido_se_ignora(bd_webhook, metafields_escritos):
+    r = credit_sync_service.aplicar_webhook_credito({"rut": "99999999-9", "status": True})
+
+    assert r == {"received": True, "ignored": True, "matched": False}
+    assert metafields_escritos == []
+
+
+def test_webhook_rut_forzado_conserva_el_credito(bd_webhook, metafields_escritos, monkeypatch):
+    monkeypatch.setenv("APRO_CREDIT_FORCE_RUTS", "76486379-8")
+    _guardar(bd_webhook, payment_type="CREDIT")
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": False})
+
+    assert _payment_type_en_bd(bd_webhook) == ["CREDIT"]
+
+
+@pytest.mark.parametrize(
+    ("status", "esperado"),
+    [
+        ("Aprobada Continental", True),
+        ("Aprobada Orsan", True),
+        ("  aprobada   ORSAN ", True),
+        ("Anulada", False),
+        ("Rechazado Apro", False),
+        ("Crédito Rechazado", False),
+        ("Credito Rechazado", False),
+        (True, True),
+        (False, False),
+    ],
+)
+def test_webhook_estados_de_apro(status, esperado):
+    assert credit_sync_service._tiene_credito_del_status(status) is esperado
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": True},
+        {"rut": "  ", "status": True},
+        {"rut": "76486379-8"},
+        {"rut": "76486379-8", "tiene_credito": "si"},
+        {"rut": "76486379-8", "tiene_credito": 1},
+    ],
+)
+def test_webhook_payload_invalido(bd_webhook, metafields_escritos, body):
+    with pytest.raises(ValueError):
+        credit_sync_service.aplicar_webhook_credito(body)
+    assert metafields_escritos == []
+
+
+# ---------------------------------------------------------------------------
+# Link de solicitud de crédito (POST /credits/url)
+# ---------------------------------------------------------------------------
+_URL_QA = "https://apro-ia-qa.apro.cl/insurances/client/6978c1d4"
+
+
+def test_solicitud_por_defecto_va_a_qa(apro_configurado, monkeypatch):
+    monkeypatch.delenv("APRO_CREDIT_URL_ENV", raising=False)
+    hechos = _responder(monkeypatch, {"url": _URL_QA})
+
+    assert credit_client.solicitar_url_credito("10.077.007-5") == _URL_QA
+    req = hechos[0]
+    assert req.full_url == "https://clientes-qa.apro.cl/credits/url"
+    assert req.get_method() == "POST"
+    assert req.headers["Authorization"] == "Bearer token-qa"
+    assert json.loads(req.data) == {"rut": "10077007-5"}
+
+
+def test_solicitud_en_prod_usa_su_host_y_su_token(apro_configurado, monkeypatch):
+    monkeypatch.setenv("APRO_CREDIT_URL_ENV", "prod")
+    hechos = _responder(monkeypatch, {"url": "https://apro-ia.apro.cl/x"})
+
+    credit_client.solicitar_url_credito("100770075")
+
+    assert hechos[0].full_url == "https://clientes.apro.cl/credits/url"
+    assert hechos[0].headers["Authorization"] == "Bearer token"
+
+
+@pytest.mark.parametrize("payload", [{}, {"url": ""}, {"url": "javascript:alert(1)"}])
+def test_solicitud_sin_url_valida_es_none(apro_configurado, monkeypatch, payload):
+    _responder(monkeypatch, payload)
+    assert credit_client.solicitar_url_credito("10077007-5") is None
+
+
+def test_solicitud_con_error_de_apro_es_none(apro_configurado, monkeypatch):
+    def _fake_urlopen(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 400, "Bad", {}, BytesIO(b""))
+
+    monkeypatch.setattr(credit_client.urllib.request, "urlopen", _fake_urlopen)
+    assert credit_client.solicitar_url_credito("10077007-5") is None
+
+
+# ---------------------------------------------------------------------------
+# Aviso al cliente: «crédito aprobado»
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def avisos_encolados(monkeypatch) -> list:
+    encolados: list = []
+    monkeypatch.setattr(
+        credit_sync_service, "encolar_credito_aprobado", lambda **kw: encolados.append(kw)
+    )
+    return encolados
+
+
+def _guardar_con_contactos(get_session, contactos: list[dict], **kw) -> None:
+    with get_session() as session:
+        empresa = _empresa(**kw)
+        session.add(empresa)
+        session.flush()
+        for c in contactos:
+            session.add(Client(company_id=empresa.id, **c))
+        session.commit()
+
+
+def test_aviso_credito_aprobado_a_los_contactos(
+    bd_webhook, metafields_escritos, avisos_encolados
+):
+    _guardar_con_contactos(
+        bd_webhook,
+        [
+            {"name": "Otro", "email": "otro@acme.cl"},
+            {"name": "Principal", "email": "Principal@acme.cl", "is_main_contact": True},
+            {"name": "Repetido", "email": "otro@ACME.cl "},
+            {"name": "Sin correo", "email": None},
+        ],
+        payment_type="DIRECT",
+    )
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": "Aprobada Orsan"})
+
+    assert avisos_encolados == [
+        {"contact_email": "principal@acme.cl", "contact_name": "Principal", "company_name": "ACME SPA"},
+        {"contact_email": "otro@acme.cl", "contact_name": "Otro", "company_name": "ACME SPA"},
+    ]
+
+
+def test_sin_aviso_si_ya_tenia_credito(bd_webhook, metafields_escritos, avisos_encolados):
+    """Un reenvío de «aprobada» no vuelve a mandar el correo."""
+    _guardar_con_contactos(
+        bd_webhook, [{"name": "Ana", "email": "ana@acme.cl"}], payment_type="CREDIT"
+    )
+
+    credit_sync_service.aplicar_webhook_credito(
+        {"rut": "76486379-8", "status": "Aprobada Continental"}
+    )
+
+    assert avisos_encolados == []
+
+
+def test_sin_aviso_cuando_se_anula(bd_webhook, metafields_escritos, avisos_encolados):
+    _guardar_con_contactos(
+        bd_webhook, [{"name": "Ana", "email": "ana@acme.cl"}], payment_type="CREDIT"
+    )
+
+    credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": "Anulada"})
+
+    assert avisos_encolados == []
+
+
+def test_job_diario_avisa_solo_las_empresas_que_ganan_credito(
+    bd_webhook, metafields_escritos, avisos_encolados, monkeypatch
+):
+    _guardar_con_contactos(
+        bd_webhook, [{"name": "Ana", "email": "ana@gana.cl"}], name="GANA", billing_rut="11111111-1"
+    )
+    _guardar_con_contactos(
+        bd_webhook,
+        [{"name": "Beto", "email": "beto@ya.cl"}],
+        name="YA TENIA",
+        billing_rut="22222222-2",
+        payment_type="CREDIT",
+    )
+    _guardar_con_contactos(
+        bd_webhook,
+        [{"name": "Caro", "email": "caro@pierde.cl"}],
+        name="PIERDE",
+        billing_rut="33333333-3",
+        payment_type="CREDIT",
+    )
+    monkeypatch.setattr(credit_sync_service, "esta_configurado", lambda: True)
+    monkeypatch.setattr(
+        credit_sync_service,
+        "consultar_en_paralelo",
+        lambda ruts: {"11111111-1": "CREDIT", "22222222-2": "CREDIT", "33333333-3": "DIRECT"},
+    )
+
+    credit_sync_service.sincronizar_todas()
+
+    assert avisos_encolados == [
+        {"contact_email": "ana@gana.cl", "contact_name": "Ana", "company_name": "GANA"}
+    ]
+
+
+def test_falla_de_la_cola_no_rompe_el_webhook(bd_webhook, metafields_escritos, monkeypatch):
+    _guardar_con_contactos(bd_webhook, [{"name": "Ana", "email": "ana@acme.cl"}])
+
+    def _explota(**kw):
+        raise RuntimeError("SQS caído")
+
+    monkeypatch.setattr(credit_sync_service, "encolar_credito_aprobado", _explota)
+
+    r = credit_sync_service.aplicar_webhook_credito({"rut": "76486379-8", "status": "Aprobada Orsan"})
+
+    assert r["payment_type"] == "CREDIT"
+    assert _payment_type_en_bd(bd_webhook) == ["CREDIT"]
+
+
+def test_solicitud_envia_el_id_sap_del_vendedor(apro_configurado, monkeypatch):
+    hechos = _responder(monkeypatch, {"url": _URL_QA})
+
+    credit_client.solicitar_url_credito("10077007-5", id_sap=" 541 ")
+
+    assert json.loads(hechos[0].data) == {"rut": "10077007-5", "id_sap": "541"}
+
+
+def test_solicitud_sin_id_sap_no_envia_la_clave(apro_configurado, monkeypatch):
+    hechos = _responder(monkeypatch, {"url": _URL_QA})
+    credit_client.solicitar_url_credito("10077007-5", id_sap=" ")
+    assert json.loads(hechos[0].data) == {"rut": "10077007-5"}

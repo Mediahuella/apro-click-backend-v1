@@ -31,7 +31,8 @@ for path in possible_shared_paths:
             sys.path.insert(0, str(path))
         break
 
-from apro.credit_client import consultar_credito  # noqa: E402
+from apro.credit_client import consultar_credito, solicitar_url_credito  # noqa: E402
+from apro.credit_link import url_solicitud_credito  # noqa: E402
 from database.engine import get_session  # noqa: E402
 from database.models.client import Client  # noqa: E402
 from database.models.company import Company  # noqa: E402
@@ -74,6 +75,11 @@ VALID_PAYMENT_TYPES = {"DIRECT", "CREDIT"}
 # format_rut_stored). Permite reutilizarlo en cualquiera de sus variantes.
 RUT_DUPLICADO_EXENTO = "76943201-9"
 
+# Plazo para pedir el link de solicitud de crédito tras enviar el registro.
+# El request_id es la única credencial del storefront: no debe servir para
+# siempre.
+_CREDIT_URL_VENTANA = dt.timedelta(hours=24)
+
 # Vendedores "internos/dev" — sólo SUPERADMIN los ve en el KPI de referidos.
 # Mantener en minúsculas (comparación case-insensitive contra `users.email`).
 _REFERRAL_KPI_HIDDEN_EMAILS: frozenset[str] = frozenset({"zobekdev1@gmail.com"})
@@ -113,6 +119,26 @@ def _payment_type_desde_apro(rut: str | None, payment_type_solicitado: str) -> s
             extra={"rut": rut, "solicitado": payment_type_solicitado, "apro": destino},
         )
     return destino
+
+
+def _nombre_vendedor(user_id: uuid.UUID | None) -> str | None:
+    """Nombre del vendedor asignado a la empresa recién aprobada.
+
+    Nunca lanza: sin vendedor o si falla la consulta, el correo sale igual.
+    """
+    if not user_id:
+        return None
+    try:
+        with get_session() as session:
+            user = session.get(User, user_id)
+            if not user:
+                return None
+            # En la BD hay nombres con espacios dobles o al final («Bryan  Ramírez »).
+            nombre = " ".join(f"{user.given_name or ''} {user.family_name or ''}".split())
+            return nombre or None
+    except Exception:
+        logger.exception("No se pudo resolver el vendedor asignado", extra={"user_id": str(user_id)})
+        return None
 
 
 def _sync_new_company_credit(
@@ -357,7 +383,10 @@ class RegistrationRequestService:
         contact_email = (body.get("contact_email") or "").strip().lower()
         contact_phone = (body.get("contact_phone") or "").strip() or None
         company_type = (body.get("company_type") or "SMALL").strip().upper()
-        payment_type = (body.get("payment_type") or "DIRECT").strip().upper()
+        # El formulario ya no pregunta la forma de pago: toda empresa nueva parte
+        # al contado y el crédito lo otorga APRO (ver ``approve_request``). Se
+        # ignora lo que venga en el body, incluso de clientes viejos del bloque.
+        payment_type = "DIRECT"
         notes = body.get("notes")
         shop_domain = body.get("shop_domain")
         source = (body.get("source") or "shopify_theme").strip()
@@ -378,9 +407,6 @@ class RegistrationRequestService:
             raise ValueError("'contact_email' es obligatorio y debe ser un email válido")
         if company_type not in VALID_COMPANY_TYPES:
             raise ValueError(f"company_type inválido: {sorted(VALID_COMPANY_TYPES)}")
-        if payment_type not in VALID_PAYMENT_TYPES:
-            raise ValueError(f"payment_type inválido: {sorted(VALID_PAYMENT_TYPES)}")
-
         rut_stored = format_rut_stored(str(rut_raw))
 
         payload: dict[str, Any] = {
@@ -595,6 +621,69 @@ class RegistrationRequestService:
         with get_session() as session:
             row = session.get(CompanyRegistrationRequest, uuid.UUID(request_id))
             return _serialize_request(row) if row else None
+
+    def credit_request_url(self, request_id: str) -> str:
+        """Link de APRO para solicitar crédito desde el formulario de registro.
+
+        Lo pide el bloque de prueba ``apro-click.register-credito.liquid`` justo
+        después de enviar una solicitud con ``payment_type = CREDIT``: la empresa
+        todavía no existe en Shopify, así que no sirve el endpoint de
+        ``companies`` (que resuelve por ``shopify_company_id``). El RUT sale de la
+        solicitud guardada, nunca del storefront, y el ``request_id`` (UUID4 que
+        solo conoce quien acaba de enviar el formulario) actúa de credencial:
+        por eso se exige que la solicitud siga pendiente, haya pedido crédito y
+        sea reciente.
+
+        Lanza ``LookupError`` si no aplica (→ 404, sin distinguir el motivo para
+        no revelar solicitudes ajenas) y ``RuntimeError`` si APRO no entrega el
+        link (→ 502).
+        """
+        self._validate_uuid(request_id)
+        with get_session() as session:
+            row = session.get(CompanyRegistrationRequest, uuid.UUID(request_id))
+            if row is None:
+                raise LookupError("Solicitud no encontrada")
+            payload = row.payload if isinstance(row.payload, dict) else {}
+            creada = row.created_at
+            if creada is not None and creada.tzinfo is None:
+                creada = creada.replace(tzinfo=dt.UTC)
+            vigente = (
+                creada is not None
+                and dt.datetime.now(dt.UTC) - creada <= _CREDIT_URL_VENTANA
+            )
+            if (
+                row.status != "PENDING"
+                or str(payload.get("payment_type") or "").upper() != "CREDIT"
+                or not vigente
+            ):
+                raise LookupError("Solicitud no encontrada")
+            rut = str(payload.get("rut") or "").strip()
+
+        url = solicitar_url_credito(rut) if rut else None
+        if not url:
+            raise RuntimeError("APRO no entregó el link de solicitud de crédito")
+        return url
+
+    def credit_request_url_for_rut(self, rut: str) -> str:
+        """Link de APRO para solicitar crédito antes de enviar el registro.
+
+        Lo pide el bloque de prueba ``apro-click.register-credito.liquid`` apenas
+        la empresa elige «Crédito», con el RUT ya verificado en el SII en el
+        paso 1. No amplía lo que ya permite el alta pública (cualquiera puede
+        registrar una solicitud con cualquier RUT y pedir el link por su
+        ``request_id``); solo se exige un RUT con dígito verificador válido.
+
+        Lanza ``ValueError`` si el RUT es inválido (→ 400) y ``RuntimeError`` si
+        APRO no entrega el link (→ 502).
+        """
+        try:
+            rut_guardado = format_rut_stored(str(rut or ""))
+        except ValueError:
+            raise ValueError("RUT inválido") from None
+        url = solicitar_url_credito(rut_guardado)
+        if not url:
+            raise RuntimeError("APRO no entregó el link de solicitud de crédito")
+        return url
 
     def approve_request(
         self,
@@ -827,10 +916,28 @@ class RegistrationRequestService:
             contact_email=contact_email,
         )
 
+        # Vendedor asignado (el elegido al aprobar o el del link de invitación) y,
+        # si la empresa queda sin crédito, el link para solicitarlo. El nombre se
+        # busca después del commit y en su propia sesión: el pool es de una
+        # conexión. El link es el estable de ``companies`` y no el de APRO, que
+        # se invalida cada vez que APRO entrega otro (ver ``apro.credit_link``).
+        seller_name = _nombre_vendedor(sales_uid or req2.referred_by_user_id)
+        credit_url = (
+            url_solicitud_credito(out["created_company"]["id"])
+            if payment_type != "CREDIT"
+            else None
+        )
+        if payment_type != "CREDIT" and not credit_url:
+            logger.warning(
+                "Aprobación sin link de crédito: falta CREDIT_LINK_SECRET o CREDIT_LINK_BASE_URL"
+            )
+
         encolar_aprobacion(
             contact_email=payload.get("contact_email", ""),
             contact_name=payload.get("contact_name", ""),
             company_name=company_name,
+            seller_name=seller_name,
+            credit_url=credit_url,
         )
         _marcar_notificado(uuid.UUID(request_id), "approval_notified_at")
         return out

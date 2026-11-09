@@ -7,6 +7,8 @@
   storefront) si ``APRO_IA_WEBHOOK_API_KEY`` está configurada.
 - ``sign_pdf_token`` / ``verify_pdf_token``: HMAC sobre el ``quote_id`` para el
   link de descarga del PDF que va por email (acceso sin login).
+- ``sign_pay_token`` / ``verify_pay_token``: HMAC (con prefijo propio) para el
+  link «Ir a pagar» de la cuenta de cliente.
 """
 from __future__ import annotations
 
@@ -66,6 +68,29 @@ def sign_pdf_token(quote_id: str) -> str:
 def verify_pdf_token(quote_id: str, token: str | None) -> bool:
     """Compara en tiempo constante el token contra el HMAC esperado."""
     expected = sign_pdf_token(quote_id)
+    if not expected or not token:
+        return False
+    return hmac.compare_digest(expected, token.strip())
+
+
+def _pay_payload(quote_id: str) -> str:
+    # Prefijo propio: el token del PDF no sirve como token de pago y viceversa.
+    return f"pay:{quote_id}"
+
+
+def sign_pay_token(quote_id: str) -> str:
+    """Token HMAC-SHA256 para el link «Ir a pagar» de la cotización."""
+    secret = _link_secret()
+    if not secret:
+        return ""
+    return hmac.new(
+        secret.encode("utf-8"), _pay_payload(str(quote_id)).encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def verify_pay_token(quote_id: str, token: str | None) -> bool:
+    """Compara en tiempo constante el token de pago contra el HMAC esperado."""
+    expected = sign_pay_token(quote_id)
     if not expected or not token:
         return False
     return hmac.compare_digest(expected, token.strip())

@@ -144,6 +144,16 @@ resources:
             RequireNumbers: true
             RequireSymbols: false
             TemporaryPasswordValidityDays: 7
+        # Invitaciones y recuperación de clave salen por SES con el dominio
+        # verificado, no por el remitente por defecto de Cognito
+        # (no-reply@verificationemail.com), que los filtros corporativos bloquean.
+        # La identidad vive en us-east-1 y necesita la política de envío
+        # `cognito-user-pools` que autoriza a email.cognito-idp.amazonaws.com
+        # (creada por CLI: CloudFormation no cruza regiones).
+        EmailConfiguration:
+          EmailSendingAccount: DEVELOPER
+          SourceArn: arn:aws:ses:us-east-1:${aws:accountId}:identity/aproclick.cl
+          From: 'Apro Click <no-reply@aproclick.cl>'
         Schema:
           - Name: email
             AttributeDataType: String

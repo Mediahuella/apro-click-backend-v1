@@ -40,6 +40,17 @@ provider:
     # Serverless como una variable suya (el default está en el cliente).
     APRO_CREDIT_PATH_TEMPLATE: ${env:APRO_CREDIT_PATH_TEMPLATE, ''}
     APRO_CREDIT_FORCE_RUTS: ${env:APRO_CREDIT_FORCE_RUTS, ''}
+    # Link de solicitud de crédito desde el registro (POST /credits/url):
+    # qa | prod. El registro ya usa producción (APRO lo habilitó en
+    # clientes.apro.cl); el bloque «Solicitar crédito» de `companies` sigue
+    # con su propio default.
+    APRO_CREDIT_URL_ENV: ${env:APRO_CREDIT_URL_ENV, 'prod'}
+    # Link estable de crédito del correo de aprobación (apro/credit_link.py):
+    # se firma aquí y lo verifica `companies`, que es quien redirige a APRO.
+    CREDIT_LINK_SECRET: ${env:CREDIT_LINK_SECRET, ''}
+    CREDIT_LINK_BASE_URL: ${env:CREDIT_LINK_BASE_URL, ''}
+    APRO_IA_CLIENTS_BASE_URL_QA: ${env:APRO_IA_CLIENTS_BASE_URL_QA, ''}
+    APRO_IA_BEARER_TOKEN_QA: ${env:APRO_IA_BEARER_TOKEN_QA, ''}
     # Cola SQS del servicio notifications para envío de emails
     NOTIFICATIONS_QUEUE_URL:
       Fn::ImportValue: apro-click-${self:provider.stage}-notifications-queue-url
@@ -80,6 +91,12 @@ functions:
       - httpApi:
           path: /api/v1/company-registration-requests/{request_id}
           method: get
+      - httpApi:
+          path: /api/v1/company-registration-requests/credit/url
+          method: post
+      - httpApi:
+          path: /api/v1/company-registration-requests/{request_id}/credit/url
+          method: post
       - httpApi:
           path: /api/v1/company-registration-requests/{request_id}/approve
           method: post

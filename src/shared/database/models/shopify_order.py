@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Numeric,
@@ -117,6 +118,20 @@ class ShopifyOrder(Base, TimestampMixin, DictMixin):
             "['Transbank Webpay']. Un pedido puede tener más de uno."
         ),
     )
+    pickup_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        index=True,
+        doc=(
+            "Fecha de retiro en tienda elegida en el checkout (atributo "
+            "`fecha_retiro` de la extensión `fecha-retiro`). NULL = despacho."
+        ),
+    )
+    pickup_location: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        doc="Sucursal de retiro (atributo `sucursal_retiro`).",
+    )
 
     company = relationship("Company", back_populates="shopify_orders")
     last_intervened_by_user = relationship(
@@ -158,4 +173,6 @@ class ShopifyOrder(Base, TimestampMixin, DictMixin):
         # contra su propio listado de empresas, que viene paginado y deja pedidos
         # mostrando el UUID pelado cuando la empresa cae fuera de la página.
         data["company_name"] = self.company.name if self.company else None
+        pickup = data.get("pickup_date")
+        data["pickup_date"] = pickup.isoformat() if isinstance(pickup, date) else None
         return data

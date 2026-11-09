@@ -59,6 +59,8 @@ _HANDLERS: dict[str, Any] = {
         contact_email=p["contact_email"],
         contact_name=p["contact_name"],
         company_name=p["company_name"],
+        seller_name=p.get("seller_name"),
+        credit_url=p.get("credit_url"),
     ),
     "solicitud_rechazada": lambda p: notify_rejection(
         contact_email=p["contact_email"],
@@ -117,7 +119,22 @@ _HANDLERS: dict[str, Any] = {
         aprobado=p["aprobado"],
         total=p.get("total"),
     ),
+    "credito_aprobado": lambda p: _credito_aprobado_desactivado(p),
 }
+
+
+def _credito_aprobado_desactivado(p: dict[str, Any]) -> None:
+    """Aviso «Ya puedes comprar con Crédito Apro» desactivado desde el 20-10-2026.
+
+    ``companies`` lo sigue encolando cuando una empresa pasa a crédito; el worker
+    lo descarta (sin reintento) para no mandarlo. Para reactivarlo, volver a
+    llamar ``notify_credito_aprobado`` con ``contact_email``, ``contact_name`` y
+    ``company_name``.
+    """
+    logger.info(
+        "Aviso credito_aprobado desactivado — no se envía",
+        extra={"empresa": p.get("company_name"), "email": p.get("contact_email")},
+    )
 
 
 def _procesar(record: dict[str, Any]) -> None:

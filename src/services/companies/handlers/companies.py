@@ -5,11 +5,13 @@ import sys
 from pathlib import Path
 
 from aws_lambda_powertools import Logger, Tracer
-from aws_lambda_powertools.event_handler import APIGatewayHttpResolver
+from aws_lambda_powertools.event_handler import APIGatewayHttpResolver, Response
 from aws_lambda_powertools.event_handler.exceptions import (
     BadRequestError,
+    ForbiddenError,
     NotFoundError,
     InternalServerError,
+    ServiceError,
     UnauthorizedError,
 )
 from aws_lambda_powertools.utilities.typing import LambdaContext
@@ -35,12 +37,21 @@ for path in possible_shared_paths:
 from services.address_service import AddressService
 from services.company_service import CompanyService
 from services.contact_service import ContactService
+from services import credit_sync_service
 from utils.cognito_access import (
     get_user_by_cognito_access_token,
     parse_bearer_authorization,
 )
-from apro.credit_client import consultar_credito, esta_configurado
-from utils.public_api_key import require_companies_public_api_key
+from apro.credit_client import (
+    consultar_credito,
+    esta_configurado,
+    solicitar_url_credito,
+)
+from apro.credit_link import verificar_token
+from utils.public_api_key import (
+    require_apro_ia_webhook_key,
+    require_companies_public_api_key,
+)
 
 logger = Logger()
 tracer = Tracer()
@@ -78,6 +89,25 @@ def _require_panel_user() -> dict:
         raise UnauthorizedError(str(e))
 
 
+#: Roles que administran empresas (edición general, vendedor asignado, borrado).
+COMPANY_ADMIN_ROLES = frozenset({"SUPERADMIN", "ADMIN"})
+
+
+def _require_company_admin() -> dict:
+    """Como ``_require_panel_user`` pero exige SUPERADMIN/ADMIN.
+
+    Para las rutas que en el panel solo usan las vistas de administración
+    (``/companies``): sin esto, cualquier sesión válida —un vendedor— podía
+    cambiar RUT, forma de pago o lista de precios de cualquier empresa
+    llamando al API directo. Los vendedores cambian la lista de precios por
+    ``PUT …/price-list``, acotado a su cartera.
+    """
+    user = _require_panel_user()
+    if str(user.get("role") or "").upper() not in COMPANY_ADMIN_ROLES:
+        raise ForbiddenError("Sin permisos para administrar empresas")
+    return user
+
+
 def _resolve_storefront_company_id(shopify_company_id: str) -> str:
     """Resuelve el UUID interno de ``Company`` a partir de ``shopify_company_id``.
 
@@ -96,6 +126,27 @@ def _resolve_storefront_company_id(shopify_company_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Storefront público — crédito de la empresa (checkout UI extension)
 # ---------------------------------------------------------------------------
+def _vendedor_publico(company: dict) -> dict | None:
+    """Vendedor asignado que se le muestra al comprador: nombre y email."""
+    vendedor = company.get("assigned_sales_user") or None
+    if not vendedor:
+        return None
+    # En la BD hay nombres con espacios dobles o al final («Bryan  Ramírez »).
+    nombre = " ".join(
+        f"{vendedor.get('given_name') or ''} {vendedor.get('family_name') or ''}".split()
+    )
+    email = (vendedor.get("email") or "").strip()
+    if not nombre and not email:
+        return None
+    return {"name": nombre or None, "email": email or None}
+
+
+def _id_sap_vendedor(company: dict) -> str | None:
+    """Código SAP del vendedor asignado: viaja a APRO como ``id_sap``."""
+    vendedor = company.get("assigned_sales_user") or {}
+    return (vendedor.get("codigo_sap") or "").strip() or None
+
+
 @app.get("/api/v1/storefront/company/credit")
 @tracer.capture_method
 def storefront_company_credit():
@@ -139,6 +190,7 @@ def storefront_company_credit():
             "currency": "CLP",
             "source": "apro" if credito else "crm",
             "quota_configured": esta_configurado(),
+            "seller": _vendedor_publico(company),
         }
         return {"statusCode": 200, "message": "OK", "data": data}
     except PermissionError as e:
@@ -150,6 +202,154 @@ def storefront_company_credit():
     except Exception:
         logger.exception("Error resolviendo el crédito de la empresa (storefront)")
         raise InternalServerError("Error resolviendo el crédito de la empresa")
+
+
+@app.post("/api/v1/storefront/company/credit/url")
+@tracer.capture_method
+def storefront_company_credit_request_url():
+    """Link de APRO para que la empresa B2B logueada solicite crédito.
+
+    Lo consume el bloque de tema ``apro-click.credit-request.liquid``. Body:
+    ``{"shopify_company_id": "..."}``. El RUT sale de la BD
+    (``Company.billing_rut``), nunca del storefront, y se envía a
+    ``POST /credits/url`` del DMS en el ambiente que fija
+    ``APRO_CREDIT_URL_ENV``. Responde ``{"url": "..."}``; ``502`` si APRO no
+    entrega el link.
+    """
+    try:
+        require_companies_public_api_key(_headers_dict())
+        body = app.current_event.json_body or {}
+        if not isinstance(body, dict):
+            raise BadRequestError("Body JSON inválido")
+        shopify_company_id = str(body.get("shopify_company_id") or "").strip()
+        if not shopify_company_id:
+            raise BadRequestError("shopify_company_id es obligatorio")
+        company = company_service.get_company_by_shopify_id(shopify_company_id)
+        if not company:
+            raise NotFoundError("Empresa no encontrada")
+        rut = str(company.get("billing_rut") or "").strip()
+        if not rut:
+            raise BadRequestError("La empresa no tiene RUT de facturación configurado")
+
+        url = solicitar_url_credito(rut, id_sap=_id_sap_vendedor(company))
+        if not url:
+            raise ServiceError(
+                502, "No se pudo obtener el link de solicitud de crédito"
+            )
+        return {"statusCode": 200, "message": "OK", "data": {"url": url}}
+    except PermissionError as e:
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except (BadRequestError, NotFoundError, ServiceError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error pidiendo el link de solicitud de crédito (storefront)")
+        raise InternalServerError("Error pidiendo el link de solicitud de crédito")
+
+
+_PAGINA_LINK_CREDITO = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Solicitud de crédito — Apro Click</title></head>
+<body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+             background:#F4F6FB;color:#2B3445;">
+  <div style="max-width:480px;margin:64px auto;padding:32px 24px;background:#FFFFFF;
+              border:1px solid #E5E7EB;border-radius:14px;text-align:center;">
+    <h1 style="margin:0 0 12px 0;font-size:20px;color:#0A1A2F;">{titulo}</h1>
+    <p style="margin:0 0 24px 0;line-height:1.6;">{mensaje}</p>
+    <a href="https://www.aproclick.cl"
+       style="display:inline-block;background:#AC71C7;color:#FFFFFF;text-decoration:none;
+              font-weight:600;padding:12px 24px;border-radius:8px;">Ir a la tienda</a>
+  </div>
+</body></html>"""
+
+
+def _pagina_link_credito(status: int, titulo: str, mensaje: str) -> Response:
+    return Response(
+        status_code=status,
+        content_type="text/html; charset=utf-8",
+        body=_PAGINA_LINK_CREDITO.format(titulo=titulo, mensaje=mensaje),
+    )
+
+
+@app.get("/api/v1/storefront/company/credit/go")
+@tracer.capture_method
+def storefront_company_credit_go():
+    """Redirige al formulario de solicitud de crédito de APRO (link del correo).
+
+    APRO invalida el link anterior cada vez que entrega uno nuevo, así que el
+    correo de aprobación no puede llevar el link de APRO directo: lleva este,
+    con un token firmado (``apro.credit_link``) que identifica a la empresa, y
+    el link de APRO se pide recién al hacer clic. Lo abre el navegador, por eso
+    responde 302 o una página HTML, nunca JSON.
+    """
+    token = (app.current_event.get_query_string_value("t") or "").strip()
+    company_id = verificar_token(token)
+    if not company_id:
+        return _pagina_link_credito(
+            404,
+            "Este link ya no es válido",
+            "Pídele a tu vendedor un link nuevo para solicitar crédito.",
+        )
+    try:
+        company = company_service.get_company(company_id)
+        rut = str((company or {}).get("billing_rut") or "").strip()
+        url = (
+            solicitar_url_credito(rut, id_sap=_id_sap_vendedor(company))
+            if rut
+            else None
+        )
+    except Exception:
+        logger.exception("Error resolviendo el link de crédito del correo")
+        url = None
+    if not url:
+        logger.warning(
+            "Link de crédito del correo sin URL de APRO", extra={"company_id": company_id}
+        )
+        return _pagina_link_credito(
+            502,
+            "No pudimos abrir la solicitud de crédito",
+            "Inténtalo de nuevo en unos minutos o contacta a tu vendedor.",
+        )
+    return Response(status_code=302, headers={"Location": url, "Cache-Control": "no-store"}, body="")
+
+
+# ---------------------------------------------------------------------------
+# Webhook APRO IA — cambio de estado del crédito de una empresa
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/companies/webhooks/apro-ia/estado-credito")
+@tracer.capture_method
+def apro_ia_credit_status_webhook():
+    """APRO avisa que una empresa ganó o perdió su crédito.
+
+    Body: ``{"rut": "76486379-8", "status": "Aprobada Continental"}``
+    con header ``x-api-key`` = ``APRO_IA_WEBHOOK_API_KEY`` (la misma de los
+    webhooks de ``quotes``). Actualiza ``payment_type`` y el metafield
+    ``aproclick.credito`` sin esperar a la corrida diaria de ``creditSync``.
+
+    No confundir con ``/api/v1/quotes/webhooks/apro-ia/creditos``, que informa
+    el **pago** de un pedido con crédito, no si la empresa lo tiene.
+    """
+    try:
+        require_apro_ia_webhook_key(_headers_dict())
+        body = app.current_event.json_body
+        if not isinstance(body, dict):
+            raise BadRequestError("Body inválido")
+        logger.info("Webhook de estado de crédito recibido", extra={"body": body})
+        data = credit_sync_service.aplicar_webhook_credito(body)
+        return {"statusCode": 200, "message": "OK", "data": data}
+    except PermissionError as e:
+        logger.warning("Webhook de estado de crédito rechazado", extra={"error": str(e)})
+        raise UnauthorizedError(str(e))
+    except ValueError as e:
+        logger.warning("Webhook de estado de crédito con payload inválido", extra={"error": str(e)})
+        raise BadRequestError(str(e))
+    except (BadRequestError, UnauthorizedError):
+        raise
+    except Exception:
+        logger.exception("Error procesando el webhook de estado de crédito")
+        raise InternalServerError("Error procesando el webhook de estado de crédito")
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +548,7 @@ def get_company(company_id: str):
 @app.put("/api/v1/companies/<company_id>")
 @tracer.capture_method
 def update_company(company_id: str):
-    _require_panel_user()
+    _require_company_admin()
     try:
         body = app.current_event.json_body or {}
         if not body:
@@ -364,10 +564,38 @@ def update_company(company_id: str):
         raise InternalServerError("Error updating company")
 
 
+@app.put("/api/v1/companies/<company_id>/price-list")
+@tracer.capture_method
+def change_company_price_list(company_id: str):
+    """Cambia la lista de precios de la empresa (``{"company_type": "SMALL|MEDIUM|BIG"}``).
+
+    Ruta propia, separada del ``PUT`` general, para poder abrírsela a los
+    vendedores: SALES solo sobre empresas de su cartera; SUPERADMIN/ADMIN sobre
+    cualquiera. Responde la empresa + ``catalog_sync``.
+    """
+    user = _require_panel_user()
+    body = app.current_event.json_body or {}
+    company_type = body.get("company_type") if isinstance(body, dict) else None
+    if not company_type:
+        raise BadRequestError("company_type es obligatorio")
+    try:
+        result = company_service.change_price_list(company_id, str(company_type), actor=user)
+        return {"statusCode": 200, "message": "Price list updated", "data": result}
+    except PermissionError as e:
+        raise ForbiddenError(str(e))
+    except LookupError as e:
+        raise NotFoundError(str(e))
+    except ValueError as e:
+        raise BadRequestError(str(e))
+    except Exception:
+        logger.exception("Error cambiando la lista de precios")
+        raise InternalServerError("Error cambiando la lista de precios")
+
+
 @app.put("/api/v1/companies/<company_id>/assigned-user")
 @tracer.capture_method
 def set_company_assigned_user(company_id: str):
-    _require_panel_user()
+    _require_company_admin()
     try:
         body = app.current_event.json_body or {}
         user_id = body.get("user_id") or None
@@ -385,7 +613,7 @@ def set_company_assigned_user(company_id: str):
 @app.delete("/api/v1/companies/<company_id>")
 @tracer.capture_method
 def delete_company(company_id: str):
-    _require_panel_user()
+    _require_company_admin()
     try:
         company_service.delete_company(company_id)
         return {"statusCode": 200, "message": "Company deleted"}

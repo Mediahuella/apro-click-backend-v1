@@ -59,14 +59,22 @@ def encolar_aprobacion(
     contact_email: str,
     contact_name: str,
     company_name: str,
+    seller_name: str | None = None,
+    credit_url: str | None = None,
 ) -> None:
-    """Encola notificación de aprobación de solicitud de empresa."""
+    """Encola notificación de aprobación de solicitud de empresa.
+
+    ``seller_name`` es el vendedor asignado y ``credit_url`` el link de APRO
+    para solicitar crédito (solo si la empresa quedó sin crédito).
+    """
     _encolar(
         "solicitud_aprobada",
         {
             "contact_email": contact_email,
             "contact_name": contact_name,
             "company_name": company_name,
+            "seller_name": seller_name,
+            "credit_url": credit_url,
         },
     )
 
@@ -224,5 +232,21 @@ def encolar_pago_credito_cliente(
             "order_name": order_name,
             "aprobado": aprobado,
             "total": total,
+        },
+    )
+
+
+def encolar_credito_aprobado(
+    contact_email: str,
+    contact_name: str | None,
+    company_name: str,
+) -> None:
+    """Encola el aviso al cliente de que APRO aprobó el crédito de su empresa."""
+    _encolar(
+        "credito_aprobado",
+        {
+            "contact_email": contact_email,
+            "contact_name": contact_name,
+            "company_name": company_name,
         },
     )

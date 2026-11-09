@@ -52,7 +52,7 @@ def _capturar(fn, /, **kwargs) -> tuple[list[str], str, str]:
 
 
 def correos() -> list[dict]:
-    """Las nueve notificaciones, en el orden de los dos flujos de negocio."""
+    """Las once notificaciones, en el orden de los tres flujos de negocio."""
     return [
         {
             "grupo": "Alta de empresa",
@@ -82,13 +82,15 @@ def correos() -> list[dict]:
             "disparador": "Un admin aprueba la solicitud. Sale después de crear la empresa en Shopify.",
             "destinatarios": "El contacto que hizo el registro.",
             "boton": "Ir a la tienda",
-            "cuerpo": "Bienvenida con el nombre del contacto y de la empresa, y el aviso de que ya puede ver precios B2B.",
-            "nota": None,
+            "cuerpo": "Bienvenida con el nombre del contacto y de la empresa, el aviso de que ya puede ver precios B2B, el vendedor asignado y, si la empresa quedó al contado, el botón «Solicitar crédito» con el link de APRO.",
+            "nota": "El botón lleva un link estable de Apro Click que, al hacer clic, pide a APRO un link recién generado (con el código SAP del vendedor) y redirige: APRO invalida el link anterior cada vez que entrega otro. Si la empresa ya tiene crédito en APRO, el bloque de crédito no aparece; sin vendedor asignado tampoco aparece su nombre.",
             "captura": _capturar(
                 ses.notify_approval,
                 contact_email=EMAIL,
                 contact_name=CONTACTO,
                 company_name=EMPRESA,
+                seller_name="Bryan Ramírez",
+                credit_url="https://apm2ytw49j.execute-api.us-east-2.amazonaws.com/api/v1/storefront/company/credit/go?t=ejemplo",
             ),
         },
         {
@@ -307,6 +309,23 @@ def correos() -> list[dict]:
                 ),
             },
         },
+        {
+            "grupo": "Crédito Apro",
+            "titulo": "Crédito aprobado (al cliente)",
+            "clave": "credito_aprobado",
+            "publico": "cliente",
+            "disparador": "APRO aprueba el crédito de la empresa: la empresa pasa de pago directo a crédito, por el webhook de estado de crédito o por la sincronización diaria con APRO.",
+            "destinatarios": "Todos los contactos con email de la empresa, el principal primero, sin repetir.",
+            "boton": "Comprar en Apro Click",
+            "cuerpo": "Empresa y los tres pasos para pagar con «Crédito Apro» en el checkout.",
+            "nota": "Sale una sola vez por aprobación: un reenvío de «aprobada» a una empresa que ya tenía crédito no vuelve a avisar. Si el crédito se anula y después se aprueba de nuevo, sí se avisa otra vez.",
+            "captura": _capturar(
+                ses.notify_credito_aprobado,
+                contact_email=EMAIL,
+                contact_name=CONTACTO,
+                company_name=EMPRESA,
+            ),
+        },
     ]
 
 
@@ -398,7 +417,7 @@ def construir() -> str:
 
     filas = "".join(_fila(c) for c in datos)
     grupos = ""
-    for nombre in ("Alta de empresa", "Cotizaciones y pagos"):
+    for nombre in ("Alta de empresa", "Cotizaciones y pagos", "Crédito Apro"):
         del_grupo = [c for c in datos if c["grupo"] == nombre]
         fichas = "".join(_ficha(c) for c in del_grupo)
         grupos += f"""
@@ -431,7 +450,7 @@ def construir() -> str:
     <div class="eyebrow">Apro Click · Referencia interna</div>
     <h1>Correos que envía la plataforma</h1>
     <p class="lede">
-      Las nueve notificaciones automáticas de Apro Click: qué las dispara, a quién llegan
+      Las once notificaciones automáticas de Apro Click: qué las dispara, a quién llegan
       y cómo se ven. Ningún correo se envía fuera de esta lista.
     </p>
     <div class="meta-row">
@@ -472,7 +491,7 @@ def construir() -> str:
   </section>
 
   <section>
-    <h2>Las nueve notificaciones</h2>
+    <h2>Las once notificaciones</h2>
     <div class="scroll">
       <table>
         <thead>

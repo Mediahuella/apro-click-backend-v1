@@ -192,3 +192,101 @@ def consultar_credito(
         "folio": str(credito.get("folio") or "") or None,
         "creado_en": str(credito.get("createdAt") or "") or None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Solicitud de crédito: link al formulario de APRO
+# ---------------------------------------------------------------------------
+#
+#     POST {base}/credits/url
+#     Authorization: Bearer {token}
+#     {"rut": "10077007-5"}
+#
+#     201 → {"url": "https://apro-ia-qa.apro.cl/insurances/client/<uuid>"}
+#
+# Devuelve el link donde el cliente completa su solicitud de crédito. Cada
+# llamada genera un link nuevo, así que no se cachea.
+#
+# El ambiente lo fija ``APRO_CREDIT_URL_ENV`` (``qa`` | ``prod``, default
+# ``qa``) y es independiente del de ``consultar_credito``: mientras la
+# solicitud se pruebe en QA, la consulta de crédito sigue en producción.
+
+_SOLICITUD_PATH = "/credits/url"
+
+
+def ambiente_solicitud() -> str:
+    valor = (os.environ.get("APRO_CREDIT_URL_ENV") or ENV_QA).strip().lower()
+    return ENV_PROD if valor == ENV_PROD else ENV_QA
+
+
+def formatear_rut(valor: str) -> str:
+    """RUT con guion y sin puntos (``10077007-5``), el formato del ejemplo de APRO."""
+    rut = normalizar_rut(valor)
+    if len(rut) < 2:
+        return rut
+    return f"{rut[:-1]}-{rut[-1]}"
+
+
+def _body_solicitud(rut: str, id_sap: str | None) -> dict[str, Any]:
+    body: dict[str, Any] = {"rut": rut}
+    codigo = (id_sap or "").strip()
+    if codigo:
+        body["id_sap"] = codigo
+    return body
+
+
+def solicitar_url_credito(
+    rut: str,
+    *,
+    id_sap: str | None = None,
+    env: str | None = None,
+    timeout: int = 10,
+) -> str | None:
+    """Pide a APRO el link de solicitud de crédito del RUT.
+
+    ``id_sap`` es el ``codigo_sap`` del vendedor asignado a la empresa en el
+    CRM; viaja como ``id_sap`` en el body (``{"rut", "id_sap"}``) para que APRO
+    sepa a quién atribuir la solicitud. Vacío o ``None`` no se envía.
+
+    Devuelve la URL, o ``None`` si no hay configuración, falla la red, APRO
+    responde un error o la respuesta no trae ``url``. Nunca lanza.
+    """
+    ambiente = env or ambiente_solicitud()
+    rut_formateado = formatear_rut(rut)
+    if not rut_formateado or not esta_configurado(ambiente):
+        return None
+
+    req = urllib.request.Request(
+        f"{_base_url(ambiente)}{_SOLICITUD_PATH}",
+        data=json.dumps(_body_solicitud(rut_formateado, id_sap)).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {_token(ambiente)}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        logger.warning(
+            "APRO devolvió error al pedir el link de solicitud de crédito",
+            extra={"rut": rut_formateado, "status": e.code, "env": ambiente},
+        )
+        return None
+    except Exception:
+        logger.warning(
+            "No se pudo pedir el link de solicitud de crédito a APRO",
+            extra={"rut": rut_formateado, "env": ambiente},
+        )
+        return None
+
+    url = payload.get("url") if isinstance(payload, dict) else None
+    if not isinstance(url, str) or not url.startswith("https://"):
+        logger.warning(
+            "Respuesta de APRO sin url válida",
+            extra={"rut": rut_formateado, "env": ambiente},
+        )
+        return None
+    return url
